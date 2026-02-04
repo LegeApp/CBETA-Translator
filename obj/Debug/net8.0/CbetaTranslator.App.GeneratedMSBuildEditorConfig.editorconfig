@@ -24,3 +24,9 @@ build_metadata.AdditionalFiles.SourceItemGroup = AvaloniaXaml
 
 [C:/Programmieren/CbetaReaderMVVM/CbetaTranslator.App/Views/MainWindow.axaml]
 build_metadata.AdditionalFiles.SourceItemGroup = AvaloniaXaml
+
+[C:/Programmieren/CbetaReaderMVVM/CbetaTranslator.App/Views/ReadableTabView.axaml]
+build_metadata.AdditionalFiles.SourceItemGroup = AvaloniaXaml
+
+[C:/Programmieren/CbetaReaderMVVM/CbetaTranslator.App/Views/TranslationTabView.axaml]
+build_metadata.AdditionalFiles.SourceItemGroup = AvaloniaXaml

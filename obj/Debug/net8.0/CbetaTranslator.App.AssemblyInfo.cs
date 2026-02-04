@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CbetaTranslator.App")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+11a17bbc82118304463b7be51acdddb301311129")]
 [assembly: System.Reflection.AssemblyProductAttribute("CbetaTranslator.App")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CbetaTranslator.App")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

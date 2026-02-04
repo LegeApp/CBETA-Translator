@@ -35,4 +35,18 @@ public sealed class FileService : IFileService
             return (orig, tran);
         });
     }
+
+    public Task WriteTranslatedAsync(string translatedDir, string relativePath, string translatedXml)
+    {
+        return Task.Run(() =>
+        {
+            var path = Path.Combine(translatedDir, relativePath);
+
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            File.WriteAllText(path, translatedXml ?? string.Empty, Utf8NoBom);
+        });
+    }
 }

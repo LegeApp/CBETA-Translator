@@ -1,0 +1,47 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="CbetaTranslator.App.Views.ReadableTabView">
+
+  <!-- Make Original smaller, Translated larger: 1* : 2* -->
+  <Grid ColumnDefinitions="1*,Auto,2*" Margin="0">
+
+    <!-- Original -->
+    <Border Background="#FF202020" BorderBrush="#FF303030" BorderThickness="1" CornerRadius="6">
+      <Grid RowDefinitions="Auto,*">
+        <Border Background="#FF202020" Padding="8">
+          <TextBlock Text="Original (read-only)" Foreground="#FFCCCCCC"/>
+        </Border>
+
+        <TextBox Name="EditorOriginal"
+                 Grid.Row="1"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"
+                 FontFamily="Consolas"
+                 ScrollViewer.VerticalScrollBarVisibility="Visible"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+      </Grid>
+    </Border>
+
+    <GridSplitter Grid.Column="1" Width="6" Background="#FF444444"/>
+
+    <!-- Translated -->
+    <Border Grid.Column="2" Background="#FF202020" BorderBrush="#FF303030" BorderThickness="1" CornerRadius="6">
+      <Grid RowDefinitions="Auto,*">
+        <Border Background="#FF202020" Padding="8">
+          <TextBlock Text="Translated (readable view)" Foreground="#FFCCCCCC"/>
+        </Border>
+
+        <TextBox Name="EditorTranslated"
+                 Grid.Row="1"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"
+                 FontFamily="Consolas"
+                 ScrollViewer.VerticalScrollBarVisibility="Visible"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+      </Grid>
+    </Border>
+
+  </Grid>
+</UserControl>
