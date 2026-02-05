@@ -5,11 +5,11 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
-using Avalonia.Markup.Xaml;
 using Avalonia.Layout;
-using Avalonia.Controls.Primitives;
+using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 
 namespace CbetaTranslator.App.Views;
@@ -64,9 +64,16 @@ public partial class TranslationTabView : UserControl
     {
         if (_btnCopyPrompt != null) _btnCopyPrompt.Click += async (_, _) => await CopySelectionWithPromptAsync();
         if (_btnPasteReplace != null) _btnPasteReplace.Click += async (_, _) => await PasteReplaceSelectionAsync();
-        if (_btnSaveTranslated != null) _btnSaveTranslated.Click += (_, _) => SaveRequested?.Invoke(this, EventArgs.Empty);
-        if (_btnSelectNext50Tags != null) _btnSelectNext50Tags.Click += async (_, _) => await SelectNextTagsAsync(50);
-        if (_btnCheckXml != null) _btnCheckXml.Click += async (_, _) => await CheckXmlHackyAsync();
+
+        // ✅ Save is now gated by the SAME hacky XML check used by the Check button.
+        if (_btnSaveTranslated != null) _btnSaveTranslated.Click += async (_, _) => await SaveIfValidAsync();
+
+        // You renamed the button but keep the control name: BtnSelectNext50Tags
+        // We select 100 tags now (as you decided).
+        if (_btnSelectNext50Tags != null) _btnSelectNext50Tags.Click += async (_, _) => await SelectNextTagsAsync(100);
+
+        // ✅ Check XML button uses the same verifier, but shows a popup even when OK.
+        if (_btnCheckXml != null) _btnCheckXml.Click += async (_, _) => await CheckXmlWithPopupAsync();
 
         // Track selection range using user input events (Avalonia TextBox has no SelectionChanged event)
         if (_tran != null)
@@ -138,13 +145,10 @@ public partial class TranslationTabView : UserControl
         int start = _tran.SelectionStart;
         int end = _tran.SelectionEnd;
 
-        if (end <= start)
+        if (end <= start && _lastCopyEnd > _lastCopyStart)
         {
-            if (_lastCopyEnd > _lastCopyStart)
-            {
-                start = _lastCopyStart;
-                end = _lastCopyEnd;
-            }
+            start = _lastCopyStart;
+            end = _lastCopyEnd;
         }
 
         start = Math.Clamp(start, 0, text.Length);
@@ -189,7 +193,6 @@ public partial class TranslationTabView : UserControl
             return;
         }
 
-        // Avalonia 11: prefer TryGetTextAsync
         var clipText = await clipboard.TryGetTextAsync() ?? "";
         clipText = clipText.Trim();
 
@@ -241,7 +244,7 @@ public partial class TranslationTabView : UserControl
         _tran.SelectionEnd = start + pastedXml.Length;
         try { _tran.CaretIndex = start; } catch { /* ignore */ }
 
-        // Update memory so "Select next 50 tags" continues from here smoothly
+        // Update memory so "Select next tags" continues from here smoothly
         _lastCopyStart = start;
         _lastCopyEnd = start + pastedXml.Length;
 
@@ -291,11 +294,11 @@ NON-NEGOTIABLE RULES (STRICT SPEC):
      • any text that is already English (leave it exactly unchanged)
    - You MUST translate ALL non-empty Chinese/Japanese/Korean (CJK) natural-language text that appears in text nodes.
    - You MAY smooth sentence flow across line-break tags (e.g. <lb/>, <pb/>) ONLY by choosing English wording that reads naturally,
-     but you may NOT move text across tags and may NOT change the punctuation structure (do not add/remove sentence-ending punctuation).
+     but you may NOT move text across tags. Punctuation is up to you as long as you make the text remain close to the original meaning.
 
 3) WHITESPACE / PUNCTUATION PRESERVATION
    - Keep whitespace/newlines as close as possible to the input (do NOT rewrap or normalize).
-   - Preserve the existing punctuation structure: do NOT add or remove punctuation marks (.,;:!?、。 etc.).
+   - Preserve the existing punctuation structure as long as you output readable English.
    - Do NOT add explanatory parentheses, glosses, or extra words like ""(i.e.)"".
 
 4) SILENT INTERNAL SELF-CHECK (MANDATORY)
@@ -373,7 +376,6 @@ XML fragment to translate:
 
         start = Math.Clamp(start, 0, text.Length);
 
-        // Find tags starting at 'start'
         var matches = XmlTagRegex.Matches(text, start);
         if (matches.Count == 0)
         {
@@ -381,14 +383,12 @@ XML fragment to translate:
             return;
         }
 
-        // ALWAYS aim for exactly tagCount tags, unless fewer remain.
         int take = Math.Min(tagCount, matches.Count);
         var last = matches[take - 1];
 
         int end = last.Index + last.Length;
         end = Math.Clamp(end, 0, text.Length);
 
-        // Extend to a clean boundary: go forward to the next newline (if any)
         end = ExtendToNextNewline(text, end);
 
         if (end <= start)
@@ -414,7 +414,7 @@ XML fragment to translate:
         end = Math.Clamp(end, 0, text.Length);
         if (end >= text.Length) return text.Length;
 
-        const int MaxScan = 4000; // safety: don't scan the whole file
+        const int MaxScan = 4000;
         int scanLimit = Math.Min(text.Length, end + MaxScan);
 
         for (int i = end; i < scanLimit; i++)
@@ -423,7 +423,6 @@ XML fragment to translate:
                 return i + 1; // include newline
         }
 
-        // If we didn't find a newline nearby, but there is whitespace right after end, eat a bit of it
         int j = end;
         while (j < text.Length && (text[j] == ' ' || text[j] == '\t' || text[j] == '\r'))
             j++;
@@ -432,16 +431,14 @@ XML fragment to translate:
     }
 
     // --------------------------
-    // Hacky XML check (no parser)
+    // Hacky XML check (no parser) — SINGLE SOURCE OF TRUTH
     // --------------------------
 
     // We care most about preserving <lb n="..." ed="..."/> pairs.
-    // This finds ONLY <lb ...> tags (including <lb .../>).
     private static readonly Regex LbTagRegex = new Regex(
         @"<lb\b(?<attrs>[^>]*)\/?>",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    // Extracts n="..." and ed="..." in any order inside the tag.
     private static readonly Regex AttrRegex = new Regex(
         @"\b(?<name>n|ed)\s*=\s*""(?<val>[^""]*)""",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -469,7 +466,6 @@ XML fragment to translate:
                 else if (name.Equals("ed", StringComparison.OrdinalIgnoreCase)) edVal = val;
             }
 
-            // Build a stable signature. Missing attrs are still meaningful.
             string sig = $"n={nVal ?? "<missing>"}|ed={edVal ?? "<missing>"}";
 
             if (dict.TryGetValue(sig, out int c)) dict[sig] = c + 1;
@@ -479,36 +475,20 @@ XML fragment to translate:
         return (total, dict);
     }
 
-    private async Task CheckXmlHackyAsync()
+    private static (bool ok, string message, int origTags, int tranTags, int origLb, int tranLb) VerifyXmlHacky(string orig, string tran)
     {
-        if (_orig == null || _tran == null)
-        {
-            Status?.Invoke(this, "Editors not available.");
-            return;
-        }
+        if (string.IsNullOrEmpty(orig))
+            return (false, "Original XML is empty. Nothing to compare.", 0, 0, 0, 0);
 
-        var orig = _orig.Text ?? "";
-        var tran = _tran.Text ?? "";
-
-        if (orig.Length == 0)
-        {
-            await ShowInfoPopupAsync("Check XML", "Original XML is empty. Nothing to compare.");
-            return;
-        }
-
-        // Basic tag count check
         int origTagCount = XmlTagRegex.Matches(orig).Count;
-        int tranTagCount = XmlTagRegex.Matches(tran).Count;
+        int tranTagCount = XmlTagRegex.Matches(tran ?? "").Count;
 
-        // LB signature check
         var (origLbTotal, origSigs) = CollectLbSignatures(orig);
-        var (tranLbTotal, tranSigs) = CollectLbSignatures(tran);
+        var (tranLbTotal, tranSigs) = CollectLbSignatures(tran ?? "");
 
-        // Compare signatures (keys)
         var missing = origSigs.Keys.Where(k => !tranSigs.ContainsKey(k)).ToList();
         var extra = tranSigs.Keys.Where(k => !origSigs.ContainsKey(k)).ToList();
 
-        // Compare counts for common keys
         var countDiffs = new List<string>();
         foreach (var k in origSigs.Keys.Intersect(tranSigs.Keys))
         {
@@ -537,15 +517,61 @@ XML fragment to translate:
 
         if (problems.Count == 0)
         {
-            Status?.Invoke(this, $"XML check OK: tags={tranTagCount:n0}, lb={tranLbTotal:n0} (n/ed preserved).");
-            await ShowInfoPopupAsync(
-                "Check XML",
-                $"OK ✅\n\nTag count matches: {tranTagCount:n0}\n<lb> count matches: {tranLbTotal:n0}\nAll <lb n=... ed=...> signatures match.\n\n(Hacky structural check only; not a full XML validator.)");
-            return;
+            string okMsg =
+                $"OK ✅\n\n" +
+                $"Tag count matches: {tranTagCount:n0}\n" +
+                $"<lb> count matches: {tranLbTotal:n0}\n" +
+                $"All <lb n=... ed=...> signatures match.\n\n" +
+                $"(Hacky structural check only; not a full XML validator.)";
+
+            return (true, okMsg, origTagCount, tranTagCount, origLbTotal, tranLbTotal);
+        }
+
+        return (false, string.Join("\n\n", problems), origTagCount, tranTagCount, origLbTotal, tranLbTotal);
+    }
+
+    // ✅ Used by BOTH Save and Check.
+    private async Task<bool> EnsureXmlOkOrWarnAsync(bool showOkPopup)
+    {
+        if (_orig == null || _tran == null)
+        {
+            Status?.Invoke(this, "Editors not available.");
+            if (showOkPopup)
+                await ShowInfoPopupAsync("Check XML", "Editors not available.");
+            return false;
+        }
+
+        var orig = _orig.Text ?? "";
+        var tran = _tran.Text ?? "";
+
+        var (ok, msg, _, tranTags, _, tranLb) = VerifyXmlHacky(orig, tran);
+
+        if (ok)
+        {
+            Status?.Invoke(this, $"XML check OK: tags={tranTags:n0}, lb={tranLb:n0} (n/ed preserved).");
+            if (showOkPopup)
+                await ShowInfoPopupAsync("Check XML", msg);
+            return true;
         }
 
         Status?.Invoke(this, "XML check failed (see popup).");
-        await ShowInfoPopupAsync("Check XML (hacky)", string.Join("\n\n", problems));
+        await ShowInfoPopupAsync("Check XML (hacky)", msg);
+        return false;
+    }
+
+    private Task CheckXmlWithPopupAsync()
+        => EnsureXmlOkOrWarnAsync(showOkPopup: true);
+
+    // --------------------------
+    // Save XML only if correct
+    // --------------------------
+
+    private async Task SaveIfValidAsync()
+    {
+        if (!await EnsureXmlOkOrWarnAsync(showOkPopup: false))
+            return;
+
+        SaveRequested?.Invoke(this, EventArgs.Empty);
     }
 
     // --------------------------
@@ -572,7 +598,6 @@ XML fragment to translate:
             Height = 240
         };
 
-        // Use attached properties; no TextBox.VerticalScrollBarVisibility in Avalonia
         ScrollViewer.SetVerticalScrollBarVisibility(text, ScrollBarVisibility.Auto);
         ScrollViewer.SetHorizontalScrollBarVisibility(text, ScrollBarVisibility.Disabled);
 
@@ -596,14 +621,16 @@ XML fragment to translate:
                 : WindowStartupLocation.CenterScreen
         };
 
+        if (owner != null)
+        {
+            ok.Click += (_, _) => win.Close();
+            await win.ShowDialog(owner);
+            return;
+        }
+
         var tcs = new TaskCompletionSource<bool>();
         ok.Click += (_, _) => { win.Close(); tcs.TrySetResult(true); };
-
-        if (owner != null)
-            await win.ShowDialog(owner); // ✅ proper await
-        else
-            win.Show();
-
+        win.Show();
         await tcs.Task;
     }
 
@@ -614,7 +641,6 @@ XML fragment to translate:
         _lastCopyStart = -1;
         _lastCopyEnd = -1;
 
-        // Reset caret/selection to start so chunking begins predictably.
         try
         {
             _tran.SelectionStart = 0;
@@ -623,7 +649,6 @@ XML fragment to translate:
         }
         catch { /* ignore */ }
 
-        // Optional but nice: focus
         try { _tran.Focus(); } catch { /* ignore */ }
     }
 }

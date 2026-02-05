@@ -23,7 +23,7 @@
 
 				<Button Name="BtnSelectNext50Tags"
 						Focusable="False"
-						Content="Select next 50 tags"
+						Content="Select next 100 tags"
 						Background="#33FFFFFF"/>
 
 				<Button Name="BtnSaveTranslated"
