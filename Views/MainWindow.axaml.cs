@@ -1,12 +1,15 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using CbetaTranslator.App.Infrastructure;
+using CbetaTranslator.App.Models;
 using CbetaTranslator.App.Services;
 using CbetaTranslator.App.Text;
 
@@ -34,11 +37,14 @@ public partial class MainWindow : Window
 
     // Services
     private readonly IFileService _fileService = new FileService();
+    private readonly AppConfigService _configService = new AppConfigService();
+    private readonly IndexCacheService _indexCacheService = new IndexCacheService();
 
     // State
     private string? _root;
     private string? _originalDir;
     private string? _translatedDir;
+
     private List<string> _relativeFiles = new();
     private string? _currentRelPath;
 
@@ -46,14 +52,21 @@ public partial class MainWindow : Window
     private string _rawOrigXml = "";
     private string _rawTranXml = "";
 
+    // Cancel background work when user switches files quickly
+    private CancellationTokenSource? _renderCts;
+
     public MainWindow()
     {
         InitializeComponent();
         FindControls();
         WireEvents();
 
-        SetStatus("Ready. Click Open Root.");
+        SetStatus("Ready.");
+
         UpdateSaveButtonState();
+
+        // ✅ Phase 0: auto-load last root (no UI blocking)
+        _ = TryAutoLoadRootFromConfigAsync();
     }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
@@ -76,7 +89,6 @@ public partial class MainWindow : Window
         _readableView = this.FindControl<ReadableTabView>("ReadableView");
         _translationView = this.FindControl<TranslationTabView>("TranslationView");
 
-        // Tell translation view how to save (it doesn't know paths itself)
         if (_translationView != null)
         {
             _translationView.SaveRequested += async (_, _) => await SaveTranslatedFromTabAsync();
@@ -119,20 +131,7 @@ public partial class MainWindow : Window
             var folder = picked.FirstOrDefault();
             if (folder is null) return;
 
-            _root = folder.Path.LocalPath;
-            _originalDir = AppPaths.GetOriginalDir(_root);
-            _translatedDir = AppPaths.GetTranslatedDir(_root);
-
-            if (_txtRoot != null) _txtRoot.Text = _root;
-
-            if (!System.IO.Directory.Exists(_originalDir))
-            {
-                SetStatus($"Original folder missing: {_originalDir}");
-                return;
-            }
-
-            AppPaths.EnsureTranslatedDirExists(_root);
-            await LoadFileListAsync();
+            await LoadRootAsync(folder.Path.LocalPath, saveToConfig: true);
         }
         catch (Exception ex)
         {
@@ -140,25 +139,108 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task LoadFileListAsync()
+    private async Task TryAutoLoadRootFromConfigAsync()
     {
-        if (_originalDir == null || _filesList == null)
+        var cfg = await _configService.TryLoadAsync();
+        if (cfg?.TextRootPath is null) return;
+
+        try
+        {
+            if (!System.IO.Directory.Exists(cfg.TextRootPath))
+                return;
+
+            SetStatus("Auto-loading last root…");
+            await LoadRootAsync(cfg.TextRootPath, saveToConfig: false);
+
+            // optionally restore last selected file later (not part of phase 0)
+        }
+        catch
+        {
+            // ignore on startup
+        }
+    }
+
+    private async Task LoadRootAsync(string rootPath, bool saveToConfig)
+    {
+        _root = rootPath;
+        _originalDir = AppPaths.GetOriginalDir(_root);
+        _translatedDir = AppPaths.GetTranslatedDir(_root);
+
+        if (_txtRoot != null) _txtRoot.Text = _root;
+
+        if (!System.IO.Directory.Exists(_originalDir))
+        {
+            SetStatus($"Original folder missing: {_originalDir}");
+            return;
+        }
+
+        AppPaths.EnsureTranslatedDirExists(_root);
+
+        if (saveToConfig)
+        {
+            await _configService.SaveAsync(new AppConfig
+            {
+                TextRootPath = _root
+            });
+        }
+
+        await LoadFileListFromCacheOrBuildAsync();
+    }
+
+    // ✅ Phase 0: cache file list in <root>/index.cache.json
+    private async Task LoadFileListFromCacheOrBuildAsync()
+    {
+        if (_root == null || _originalDir == null || _filesList == null)
             return;
 
-        SetStatus("Scanning xml-p5�");
+        ClearViews();
 
-        _relativeFiles = await _fileService.EnumerateXmlRelativePathsAsync(_originalDir);
+        // Try cache
+        var cache = await _indexCacheService.TryLoadAsync(_root);
+        if (cache != null && cache.RelativePaths.Count > 0)
+        {
+            _relativeFiles = cache.RelativePaths;
+            _filesList.ItemsSource = _relativeFiles;
+            SetStatus($"Loaded index cache: {_relativeFiles.Count:n0} files.");
+            return;
+        }
+
+        // Build cache with progress (async; UI responsive)
+        SetStatus("Building index cache… (first run will take a moment)");
+
+        var progress = new Progress<(int done, int total)>(p =>
+        {
+            SetStatus($"Indexing files… {p.done:n0}/{p.total:n0}");
+        });
+
+        IndexCache built;
+        try
+        {
+            built = await _indexCacheService.BuildAsync(_originalDir, _root, progress);
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Index build failed: " + ex.Message);
+            // fallback to old behavior
+            _relativeFiles = await _fileService.EnumerateXmlRelativePathsAsync(_originalDir);
+            _filesList.ItemsSource = _relativeFiles;
+            SetStatus($"Fallback scan done: {_relativeFiles.Count:n0} files.");
+            return;
+        }
+
+        await _indexCacheService.SaveAsync(_root, built);
+
+        _relativeFiles = built.RelativePaths;
         _filesList.ItemsSource = _relativeFiles;
 
-        _filesList.SelectedItem = null;
-        _currentRelPath = null;
-
-        ClearViews();
-        SetStatus($"Found {_relativeFiles.Count:n0} XML files. Click one to load.");
+        SetStatus($"Index cache created: {_relativeFiles.Count:n0} files.");
     }
 
     private void ClearViews()
     {
+        _renderCts?.Cancel();
+        _renderCts = null;
+
         _rawOrigXml = "";
         _rawTranXml = "";
         _currentRelPath = null;
@@ -184,6 +266,11 @@ public partial class MainWindow : Window
         if (_originalDir == null || _translatedDir == null)
             return;
 
+        // cancel previous render task if any
+        _renderCts?.Cancel();
+        _renderCts = new CancellationTokenSource();
+        var ct = _renderCts.Token;
+
         _currentRelPath = relPath;
 
         if (_txtCurrentFile != null)
@@ -196,24 +283,47 @@ public partial class MainWindow : Window
         _rawOrigXml = orig ?? "";
         _rawTranXml = tran ?? "";
 
-        // Readable render
-        SetStatus("Rendering readable view�");
-        var renderOrig = CbetaTeiRenderer.Render(_rawOrigXml);
-        var renderTran = CbetaTeiRenderer.Render(_rawTranXml);
-
-        _readableView?.SetRendered(renderOrig, renderTran);
-
-        // Raw XML tab
+        // ✅ Immediately populate XML tab (fast)
         _translationView?.SetXml(_rawOrigXml, _rawTranXml);
-
         UpdateSaveButtonState();
 
-        SetStatus($"Loaded. Readable segments: O={renderOrig.Segments.Count:n0}, T={renderTran.Segments.Count:n0}.");
+        // ✅ Render readable view in background (no UI freeze)
+        SetStatus("Rendering readable view…");
+
+        try
+        {
+            var renderTask = Task.Run(() =>
+            {
+                ct.ThrowIfCancellationRequested();
+                var ro = CbetaTeiRenderer.Render(_rawOrigXml);
+                ct.ThrowIfCancellationRequested();
+                var rt = CbetaTeiRenderer.Render(_rawTranXml);
+                return (ro, rt);
+            }, ct);
+
+            var (renderOrig, renderTran) = await renderTask;
+
+            if (ct.IsCancellationRequested)
+                return;
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                _readableView?.SetRendered(renderOrig, renderTran);
+                SetStatus($"Loaded. Readable segments: O={renderOrig.Segments.Count:n0}, T={renderTran.Segments.Count:n0}.");
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            // user clicked another file; ignore
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Render failed: " + ex.Message);
+        }
     }
 
     private void Save_Click(object? sender, RoutedEventArgs e)
     {
-        // Save button is meant for translation tab
         _ = SaveTranslatedFromTabAsync();
     }
 
@@ -238,11 +348,38 @@ public partial class MainWindow : Window
             await _fileService.WriteTranslatedAsync(_translatedDir, _currentRelPath, xml);
             SetStatus("Saved translated XML: " + _currentRelPath);
 
-            // Optional: refresh readable tab too so it reflects latest translation
+            // Re-render translated readable in background (don’t freeze)
             _rawTranXml = xml ?? "";
-            var renderTran = CbetaTeiRenderer.Render(_rawTranXml);
-            var renderOrig = CbetaTeiRenderer.Render(_rawOrigXml);
-            _readableView?.SetRendered(renderOrig, renderTran);
+
+            _renderCts?.Cancel();
+            _renderCts = new CancellationTokenSource();
+            var ct = _renderCts.Token;
+
+            SetStatus("Re-rendering readable view…");
+
+            var renderTask = Task.Run(() =>
+            {
+                ct.ThrowIfCancellationRequested();
+                var ro = CbetaTeiRenderer.Render(_rawOrigXml);
+                ct.ThrowIfCancellationRequested();
+                var rt = CbetaTeiRenderer.Render(_rawTranXml);
+                return (ro, rt);
+            }, ct);
+
+            var (renderOrig, renderTran) = await renderTask;
+
+            if (!ct.IsCancellationRequested)
+            {
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    _readableView?.SetRendered(renderOrig, renderTran);
+                    SetStatus("Saved + readable view updated.");
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore
         }
         catch (Exception ex)
         {
