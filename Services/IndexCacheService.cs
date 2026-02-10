@@ -270,6 +270,18 @@ public sealed class IndexCacheService
         return false;
     }
 
+    public TranslationStatus ComputeStatusForPairLive(
+        string origAbs,
+        string tranAbs,
+        string rootForLogs,
+        string relKeyForLogs,
+        bool verboseLog = true)
+    {
+        return ComputeStatus(origAbs, tranAbs, rootForLogs, relKeyForLogs, verboseLog);
+    }
+
+
+
     public Task<IndexCache> BuildAsync(
         string originalDir,
         string translatedDir,

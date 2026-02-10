@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.IO;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
@@ -414,6 +415,48 @@ public partial class MainWindow : Window
             await _fileService.WriteTranslatedAsync(_translatedDir, _currentRelPath, xml);
             SetStatus("Saved translated XML: " + _currentRelPath);
 
+            // --- Live status refresh (red/yellow/green) ---
+            try
+            {
+                if (_root != null && _originalDir != null && _translatedDir != null && _currentRelPath != null)
+                {
+                    var origAbs = Path.Combine(_originalDir, _currentRelPath);
+                    var tranAbs = Path.Combine(_translatedDir, _currentRelPath);
+
+                    var newStatus = _indexCacheService.ComputeStatusForPairLive(
+                        origAbs,
+                        tranAbs,
+                        _root,
+                        NormalizeRelForLogs(_currentRelPath),
+                        verboseLog: true);
+
+                    var canon = _allItems.FirstOrDefault(x =>
+                        string.Equals(x.RelPath, _currentRelPath, StringComparison.OrdinalIgnoreCase));
+
+                    if (canon != null)
+                        canon.Status = newStatus;
+
+                    ApplyFilter();
+
+                    // best-effort persist cache
+                    var cache = new IndexCache
+                    {
+                        Version = 2,
+                        RootPath = _root,
+                        BuiltUtc = DateTime.UtcNow,
+                        Entries = _allItems
+                    };
+                    await _indexCacheService.SaveAsync(_root, cache);
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+
+
+
+
             _rawTranXml = xml ?? "";
 
             _renderCts?.Cancel();
@@ -467,4 +510,8 @@ public partial class MainWindow : Window
         if (_txtStatus != null)
             _txtStatus.Text = msg;
     }
+
+    private static string NormalizeRelForLogs(string p)
+    => (p ?? "").Replace('\\', '/').TrimStart('/');
+
 }
