@@ -37,6 +37,8 @@ public partial class SearchTabView : UserControl
     private string? _root;
     private string? _originalDir;
     private string? _translatedDir;
+    private bool _forceRebuildNextClick;
+
 
     private List<FileNavItem> _fileIndex = new();
 
@@ -100,7 +102,17 @@ public partial class SearchTabView : UserControl
     {
         if (_btnSearch != null) _btnSearch.Click += async (_, _) => await StartSearchAsync();
         if (_btnCancel != null) _btnCancel.Click += (_, _) => Cancel();
-        if (_btnBuildIndex != null) _btnBuildIndex.Click += async (_, _) => await BuildIndexAsync();
+        if (_btnBuildIndex != null)
+        {
+            // Capture Shift state reliably (Avalonia exposes it on pointer events)
+            _btnBuildIndex.PointerPressed += (_, e) =>
+            {
+                _forceRebuildNextClick = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            };
+
+            _btnBuildIndex.Click += async (_, _) => await BuildIndexAsync();
+        }
+
         if (_btnExportTsv != null) _btnExportTsv.Click += async (_, _) => await ExportTsvAsync();
 
         if (_txtQuery != null)
@@ -229,6 +241,9 @@ public partial class SearchTabView : UserControl
             return;
         }
 
+        bool force = _forceRebuildNextClick;
+        _forceRebuildNextClick = false;
+
         Cancel();
         _cts = new CancellationTokenSource();
         var ct = _cts.Token;
@@ -236,19 +251,20 @@ public partial class SearchTabView : UserControl
         try
         {
             if (_btnCancel != null) _btnCancel.IsEnabled = true;
-            SetProgress("Building index...");
-            SetSummary("Indexing... (this is one-time; later searches are fast)");
+
+            SetProgress(force ? "Rebuilding index..." : "Updating index...");
+            SetSummary(force ? "Rebuilding index... (full rebuild)" : "Updating index... (incremental)");
 
             var prog = new Progress<(int done, int total, string phase)>(p =>
             {
                 SetProgress($"{p.phase} {p.done:n0}/{p.total:n0}");
             });
 
-            await _svc.BuildAsync(_root, _originalDir, _translatedDir, prog, ct);
+            await _svc.BuildOrUpdateAsync(_root, _originalDir, _translatedDir, forceRebuild: force, progress: prog, ct: ct);
 
-            SetProgress("Index built.");
-            SetSummary("Index built. Ready to search.");
-            Status?.Invoke(this, "Search index built.");
+            SetProgress(force ? "Index rebuilt." : "Index updated.");
+            SetSummary("Index ready. Search will be fast.");
+            Status?.Invoke(this, force ? "Search index rebuilt." : "Search index updated.");
         }
         catch (OperationCanceledException)
         {
@@ -266,6 +282,8 @@ public partial class SearchTabView : UserControl
             if (_btnCancel != null) _btnCancel.IsEnabled = false;
         }
     }
+
+
 
     private async Task StartSearchAsync()
     {
