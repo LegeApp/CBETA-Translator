@@ -4,13 +4,17 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 
 namespace CbetaTranslator.App.Views;
 
@@ -32,6 +36,34 @@ public partial class TranslationTabView : UserControl
 
     public event EventHandler? SaveRequested;
     public event EventHandler<string>? Status;
+
+    // -------------------------
+    // Ctrl+F Find state
+    // -------------------------
+    private Border? _findBar;
+    private TextBox? _findQuery;
+    private TextBlock? _findCount;
+    private TextBlock? _findScope;
+    private Button? _btnPrev;
+    private Button? _btnNext;
+    private Button? _btnCloseFind;
+
+    private SearchHighlightOverlay? _hlOrig;
+    private SearchHighlightOverlay? _hlTran;
+
+    private TextBox? _findTarget; // which editor we are searching in
+
+    private readonly List<int> _matchStarts = new();
+    private int _matchLen = 0;
+    private int _matchIndex = -1;
+
+    private static readonly TimeSpan FindRecomputeDebounce = TimeSpan.FromMilliseconds(140);
+    private DispatcherTimer? _findDebounceTimer;
+
+    // Track last user input editor for sane scope selection
+    private DateTime _lastUserInputUtc = DateTime.MinValue;
+    private TextBox? _lastUserInputEditor;
+    private const int UserInputPriorityWindowMs = 250;
 
     public TranslationTabView()
     {
@@ -58,6 +90,22 @@ public partial class TranslationTabView : UserControl
 
         if (_orig != null) _orig.IsReadOnly = true;
         if (_tran != null) _tran.IsReadOnly = false;
+
+        // Find UI
+        _findBar = this.FindControl<Border>("FindBar");
+        _findQuery = this.FindControl<TextBox>("FindQuery");
+        _findCount = this.FindControl<TextBlock>("FindCount");
+        _findScope = this.FindControl<TextBlock>("FindScope");
+        _btnPrev = this.FindControl<Button>("BtnPrev");
+        _btnNext = this.FindControl<Button>("BtnNext");
+        _btnCloseFind = this.FindControl<Button>("BtnCloseFind");
+
+        // Highlight overlays
+        _hlOrig = this.FindControl<SearchHighlightOverlay>("HlOrigXml");
+        _hlTran = this.FindControl<SearchHighlightOverlay>("HlTranXml");
+
+        if (_hlOrig != null) _hlOrig.Target = _orig;
+        if (_hlTran != null) _hlTran.Target = _tran;
     }
 
     private void WireEvents()
@@ -68,11 +116,7 @@ public partial class TranslationTabView : UserControl
         // ✅ Save is now gated by the SAME hacky XML check used by the Check button.
         if (_btnSaveTranslated != null) _btnSaveTranslated.Click += async (_, _) => await SaveIfValidAsync();
 
-        // You renamed the button but keep the control name: BtnSelectNext50Tags
-        // We select 100 tags now (as you decided).
         if (_btnSelectNext50Tags != null) _btnSelectNext50Tags.Click += async (_, _) => await SelectNextTagsAsync(100);
-
-        // ✅ Check XML button uses the same verifier, but shows a popup even when OK.
         if (_btnCheckXml != null) _btnCheckXml.Click += async (_, _) => await CheckXmlWithPopupAsync();
 
         // Track selection range using user input events (Avalonia TextBox has no SelectionChanged event)
@@ -81,6 +125,55 @@ public partial class TranslationTabView : UserControl
             _tran.PointerReleased += (_, _) => RememberSelectionIfAny();
             _tran.KeyUp += (_, _) => RememberSelectionIfAny();
         }
+
+        // Track “last user input editor” for find scope
+        HookUserInputTracking(_orig);
+        HookUserInputTracking(_tran);
+
+        // Ctrl+F / Escape handling at control level
+        AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);
+
+        if (_findQuery != null)
+        {
+            _findQuery.KeyDown += FindQuery_KeyDown;
+            _findQuery.PropertyChanged += (_, e) =>
+            {
+                if (e.Property == TextBox.TextProperty)
+                    DebounceRecomputeMatches();
+            };
+        }
+
+        if (_btnNext != null) _btnNext.Click += (_, _) => JumpNext();
+        if (_btnPrev != null) _btnPrev.Click += (_, _) => JumpPrev();
+        if (_btnCloseFind != null) _btnCloseFind.Click += (_, _) => CloseFind();
+
+        // If user focuses an editor while find is open, switch scope (but keep current match if possible)
+        if (_orig != null)
+        {
+            _orig.GotFocus += (_, _) =>
+            {
+                if (_findBar?.IsVisible == true)
+                    SetFindTarget(_orig, preserveIndex: true);
+            };
+        }
+        if (_tran != null)
+        {
+            _tran.GotFocus += (_, _) =>
+            {
+                if (_findBar?.IsVisible == true)
+                    SetFindTarget(_tran, preserveIndex: true);
+            };
+        }
+    }
+
+    private void HookUserInputTracking(TextBox? tb)
+    {
+        if (tb == null) return;
+
+        tb.PointerPressed += (_, _) => { _lastUserInputUtc = DateTime.UtcNow; _lastUserInputEditor = tb; };
+        tb.PointerReleased += (_, _) => { _lastUserInputUtc = DateTime.UtcNow; _lastUserInputEditor = tb; };
+        tb.KeyDown += (_, _) => { _lastUserInputUtc = DateTime.UtcNow; _lastUserInputEditor = tb; };
+        tb.KeyUp += (_, _) => { _lastUserInputUtc = DateTime.UtcNow; _lastUserInputEditor = tb; };
     }
 
     private void RememberSelectionIfAny()
@@ -106,6 +199,9 @@ public partial class TranslationTabView : UserControl
         _lastCopyEnd = -1;
         ResetNavigationState();
         UpdateHint("Select a file to edit XML.");
+
+        ClearFindState();
+        CloseFind();
     }
 
     public void SetXml(string originalXml, string translatedXml)
@@ -117,6 +213,10 @@ public partial class TranslationTabView : UserControl
         _lastCopyEnd = -1;
         ResetNavigationState();
         UpdateHint("Tip: select a chunk in Translated XML → Copy selection + prompt.");
+
+        // keep find open, recompute
+        if (_findBar?.IsVisible == true)
+            RecomputeMatches(resetToFirst: false);
     }
 
     public string GetTranslatedXml()
@@ -141,7 +241,6 @@ public partial class TranslationTabView : UserControl
             return;
         }
 
-        // Prefer current selection; if it vanished due to button focus, fallback to last remembered range.
         int start = _tran.SelectionStart;
         int end = _tran.SelectionEnd;
 
@@ -161,7 +260,6 @@ public partial class TranslationTabView : UserControl
 
         string selectionXml = text.Substring(start, end - start);
 
-        // Keep memory updated (important if clamp changed things)
         _lastCopyStart = start;
         _lastCopyEnd = end;
 
@@ -209,7 +307,6 @@ public partial class TranslationTabView : UserControl
             return;
         }
 
-        // Prefer current selection, else fallback to last copied range
         int start = _tran.SelectionStart;
         int end = _tran.SelectionEnd;
 
@@ -239,16 +336,300 @@ public partial class TranslationTabView : UserControl
 
         _tran.Text = sb.ToString();
 
-        // Reselect inserted text
         _tran.SelectionStart = start;
         _tran.SelectionEnd = start + pastedXml.Length;
         try { _tran.CaretIndex = start; } catch { /* ignore */ }
 
-        // Update memory so "Select next tags" continues from here smoothly
         _lastCopyStart = start;
         _lastCopyEnd = start + pastedXml.Length;
 
         Status?.Invoke(this, $"Pasted & replaced selection with {pastedXml.Length:n0} chars.");
+    }
+
+    // --------------------------
+    // Ctrl+F Find UI
+    // --------------------------
+
+    private void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.F && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            OpenFind();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.Escape && _findBar?.IsVisible == true)
+        {
+            CloseFind();
+            e.Handled = true;
+            return;
+        }
+
+        if (_findBar?.IsVisible == true && e.Key == Key.F3)
+        {
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) JumpPrev();
+            else JumpNext();
+            e.Handled = true;
+            return;
+        }
+    }
+
+    private void FindQuery_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (_findBar?.IsVisible != true) return;
+
+        if (e.Key == Key.Enter)
+        {
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) JumpPrev();
+            else JumpNext();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.Escape)
+        {
+            CloseFind();
+            e.Handled = true;
+            return;
+        }
+    }
+
+    private void OpenFind()
+    {
+        if (_findBar == null || _findQuery == null) return;
+
+        _findBar.IsVisible = true;
+
+        var target = DetermineCurrentPaneForFind();
+        SetFindTarget(target, preserveIndex: false);
+
+        _findQuery.Focus();
+        _findQuery.SelectionStart = 0;
+        _findQuery.SelectionEnd = (_findQuery.Text ?? "").Length;
+
+        RecomputeMatches(resetToFirst: false);
+    }
+
+    private void CloseFind()
+    {
+        if (_findBar != null)
+            _findBar.IsVisible = false;
+
+        ClearHighlight();
+
+        // restore focus without messing with selections
+        _findTarget?.Focus();
+    }
+
+    private TextBox? DetermineCurrentPaneForFind()
+    {
+        if (_orig == null || _tran == null)
+            return _tran;
+
+        bool recentInput = (DateTime.UtcNow - _lastUserInputUtc).TotalMilliseconds <= UserInputPriorityWindowMs;
+        if (recentInput && _lastUserInputEditor != null)
+            return _lastUserInputEditor;
+
+        if (_tran.IsFocused || _tran.IsKeyboardFocusWithin) return _tran;
+        if (_orig.IsFocused || _orig.IsKeyboardFocusWithin) return _orig;
+
+        return _tran;
+    }
+
+    private void SetFindTarget(TextBox? tb, bool preserveIndex)
+    {
+        if (tb == null) return;
+
+        _findTarget = tb;
+
+        if (_findScope != null)
+            _findScope.Text = ReferenceEquals(tb, _orig) ? "Find (Original):" : "Find (Translated):";
+
+        RecomputeMatches(resetToFirst: !preserveIndex);
+    }
+
+    private void DebounceRecomputeMatches()
+    {
+        _findDebounceTimer ??= new DispatcherTimer { Interval = FindRecomputeDebounce };
+        _findDebounceTimer.Stop();
+        _findDebounceTimer.Tick -= FindDebounceTimer_Tick;
+        _findDebounceTimer.Tick += FindDebounceTimer_Tick;
+        _findDebounceTimer.Start();
+    }
+
+    private void FindDebounceTimer_Tick(object? sender, EventArgs e)
+    {
+        _findDebounceTimer?.Stop();
+        RecomputeMatches(resetToFirst: true);
+    }
+
+    private void RecomputeMatches(bool resetToFirst)
+    {
+        if (_findBar?.IsVisible != true) return;
+
+        var tb = _findTarget;
+        if (tb == null)
+            return;
+
+        string hay = tb.Text ?? "";
+        string q = (_findQuery?.Text ?? "").Trim();
+
+        int oldSelectedStart = -1;
+        if (!resetToFirst && _matchIndex >= 0 && _matchIndex < _matchStarts.Count)
+            oldSelectedStart = _matchStarts[_matchIndex];
+
+        _matchStarts.Clear();
+        _matchLen = 0;
+        _matchIndex = -1;
+
+        if (q.Length == 0 || hay.Length == 0)
+        {
+            UpdateFindCount();
+            ClearHighlight();
+            return;
+        }
+
+        _matchLen = q.Length;
+
+        int idx = 0;
+        while (true)
+        {
+            idx = hay.IndexOf(q, idx, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) break;
+            _matchStarts.Add(idx);
+            idx = idx + Math.Max(1, q.Length);
+        }
+
+        if (_matchStarts.Count == 0)
+        {
+            UpdateFindCount();
+            ClearHighlight();
+            return;
+        }
+
+        if (resetToFirst)
+        {
+            int caret = tb.CaretIndex;
+            int nearest = _matchStarts.FindIndex(s => s >= caret);
+            _matchIndex = nearest >= 0 ? nearest : 0;
+        }
+        else
+        {
+            if (oldSelectedStart >= 0)
+            {
+                int exact = _matchStarts.IndexOf(oldSelectedStart);
+                if (exact >= 0) _matchIndex = exact;
+                else
+                {
+                    int nearest = _matchStarts.FindIndex(s => s >= oldSelectedStart);
+                    _matchIndex = nearest >= 0 ? nearest : _matchStarts.Count - 1;
+                }
+            }
+            else
+            {
+                _matchIndex = 0;
+            }
+        }
+
+        UpdateFindCount();
+        JumpToCurrentMatch(scroll: false);
+    }
+
+    private void UpdateFindCount()
+    {
+        if (_findCount == null) return;
+
+        if (_matchStarts.Count == 0 || _matchIndex < 0)
+            _findCount.Text = "0/0";
+        else
+            _findCount.Text = $"{_matchIndex + 1}/{_matchStarts.Count}";
+    }
+
+    private void JumpNext()
+    {
+        if (_matchStarts.Count == 0) return;
+        _matchIndex = (_matchIndex + 1) % _matchStarts.Count;
+        UpdateFindCount();
+        JumpToCurrentMatch(scroll: true);
+    }
+
+    private void JumpPrev()
+    {
+        if (_matchStarts.Count == 0) return;
+        _matchIndex = (_matchIndex - 1 + _matchStarts.Count) % _matchStarts.Count;
+        UpdateFindCount();
+        JumpToCurrentMatch(scroll: true);
+    }
+
+    private void JumpToCurrentMatch(bool scroll)
+    {
+        if (_findTarget == null) return;
+        if (_matchIndex < 0 || _matchIndex >= _matchStarts.Count) return;
+
+        int start = _matchStarts[_matchIndex];
+        int len = _matchLen;
+
+        // highlight immediately (works when already visible)
+        ApplyHighlight(_findTarget, start, len);
+
+        if (!scroll)
+            return;
+
+        try
+        {
+            _findTarget.Focus();
+
+            // scroll via caret only (do NOT touch selection)
+            _findTarget.CaretIndex = Math.Clamp(start, 0, (_findTarget.Text ?? "").Length);
+
+            DispatcherTimer.RunOnce(() =>
+            {
+                try { CenterByCaretRect(_findTarget, start); } catch { /* ignore */ }
+                ApplyHighlight(_findTarget, start, len);
+            }, TimeSpan.FromMilliseconds(25));
+
+            DispatcherTimer.RunOnce(() =>
+            {
+                try { CenterByCaretRect(_findTarget, start); } catch { /* ignore */ }
+                ApplyHighlight(_findTarget, start, len);
+            }, TimeSpan.FromMilliseconds(85));
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private void ApplyHighlight(TextBox target, int start, int len)
+    {
+        if (_hlOrig == null || _hlTran == null) return;
+
+        if (ReferenceEquals(target, _orig))
+        {
+            _hlTran.Clear();
+            _hlOrig.SetRange(start, len);
+        }
+        else
+        {
+            _hlOrig.Clear();
+            _hlTran.SetRange(start, len);
+        }
+    }
+
+    private void ClearHighlight()
+    {
+        _hlOrig?.Clear();
+        _hlTran?.Clear();
+    }
+
+    private void ClearFindState()
+    {
+        _matchStarts.Clear();
+        _matchLen = 0;
+        _matchIndex = -1;
+        UpdateFindCount();
+        ClearHighlight();
     }
 
     // --------------------------
@@ -320,7 +701,6 @@ XML fragment to translate:
 
     private static string ExtractXmlFromClipboard(string clipboardText)
     {
-        // Extract first ```xml ... ``` block if present
         var m = Regex.Match(
             clipboardText,
             @"```(?:xml)?\s*(?<xml>[\s\S]*?)\s*```",
@@ -329,7 +709,6 @@ XML fragment to translate:
         if (m.Success)
             return m.Groups["xml"].Value.Trim();
 
-        // Fallback: assume raw XML
         return clipboardText.Trim();
     }
 
@@ -351,10 +730,6 @@ XML fragment to translate:
             return;
         }
 
-        // Smooth workflow start:
-        // 1) If there's an active selection: continue after it.
-        // 2) Else if we have a remembered range: continue after it.
-        // 3) Else: use caret index.
         int start;
         int selStart = _tran.SelectionStart;
         int selEnd = _tran.SelectionEnd;
@@ -420,7 +795,7 @@ XML fragment to translate:
         for (int i = end; i < scanLimit; i++)
         {
             if (text[i] == '\n')
-                return i + 1; // include newline
+                return i + 1;
         }
 
         int j = end;
@@ -434,7 +809,6 @@ XML fragment to translate:
     // Hacky XML check (no parser) — SINGLE SOURCE OF TRUTH
     // --------------------------
 
-    // We care most about preserving <lb n="..." ed="..."/> pairs.
     private static readonly Regex LbTagRegex = new Regex(
         @"<lb\b(?<attrs>[^>]*)\/?>",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -530,7 +904,6 @@ XML fragment to translate:
         return (false, string.Join("\n\n", problems), origTagCount, tranTagCount, origLbTotal, tranLbTotal);
     }
 
-    // ✅ Used by BOTH Save and Check.
     private async Task<bool> EnsureXmlOkOrWarnAsync(bool showOkPopup)
     {
         if (_orig == null || _tran == null)
@@ -561,10 +934,6 @@ XML fragment to translate:
 
     private Task CheckXmlWithPopupAsync()
         => EnsureXmlOkOrWarnAsync(showOkPopup: true);
-
-    // --------------------------
-    // Save XML only if correct
-    // --------------------------
 
     private async Task SaveIfValidAsync()
     {
@@ -603,7 +972,7 @@ XML fragment to translate:
 
         var panel = new StackPanel
         {
-            Margin = new Avalonia.Thickness(16),
+            Margin = new Thickness(16),
             Spacing = 10
         };
 
@@ -650,5 +1019,107 @@ XML fragment to translate:
         catch { /* ignore */ }
 
         try { _tran.Focus(); } catch { /* ignore */ }
+    }
+
+    // --------------------------
+    // Scroll helper (vertical centering)
+    // --------------------------
+
+    private static ScrollViewer? FindScrollViewer(Control? c)
+    {
+        if (c == null) return null;
+        return c.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+    }
+
+    private static bool IsFinitePositive(double v)
+        => !double.IsNaN(v) && !double.IsInfinity(v) && v > 0;
+
+    private static double ClampY(double extentH, double viewportH, double y)
+    {
+        if (IsFinitePositive(extentH) && IsFinitePositive(viewportH))
+        {
+            double maxY = Math.Max(0, extentH - viewportH);
+            return Math.Max(0, Math.Min(y, maxY));
+        }
+        return Math.Max(0, y);
+    }
+
+    private static void CenterByCaretRect(TextBox tb, int caretIndex)
+    {
+        var sv = FindScrollViewer(tb);
+        if (sv == null) return;
+
+        double viewportH = sv.Viewport.Height;
+        double extentH = sv.Extent.Height;
+
+        if (!IsFinitePositive(viewportH))
+            return;
+
+        if (!TryGetCaretYInScrollViewer(tb, sv, caretIndex, out double caretY))
+            return;
+
+        double targetY = viewportH / 2.0;
+        double delta = caretY - targetY;
+
+        if (Math.Abs(delta) <= Math.Max(6.0, viewportH * 0.03))
+            return;
+
+        double desiredY = sv.Offset.Y + delta;
+        desiredY = ClampY(extentH, viewportH, desiredY);
+
+        sv.Offset = new Vector(sv.Offset.X, desiredY);
+    }
+
+    private static bool TryGetCaretYInScrollViewer(TextBox tb, ScrollViewer sv, int charIndex, out double caretY)
+    {
+        caretY = 0;
+
+        int len = tb.Text?.Length ?? 0;
+        if (len <= 0) return false;
+        charIndex = Math.Clamp(charIndex, 0, len);
+
+        try
+        {
+            var presenter = tb.GetVisualDescendants().FirstOrDefault(v => v.GetType().Name == "TextPresenter");
+            if (presenter != null)
+            {
+                var mPr = presenter.GetType().GetMethod("GetRectFromCharacterIndex", new[] { typeof(int) });
+                if (mPr != null)
+                {
+                    var val = mPr.Invoke(presenter, new object[] { charIndex });
+                    if (val is Rect r2)
+                    {
+                        var p = presenter.TranslatePoint(new Point(r2.X, r2.Y), sv);
+                        if (p != null)
+                        {
+                            caretY = p.Value.Y;
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        catch { /* ignore */ }
+
+        var mTb = tb.GetType().GetMethod("GetRectFromCharacterIndex", new[] { typeof(int) });
+        if (mTb != null)
+        {
+            try
+            {
+                var val = mTb.Invoke(tb, new object[] { charIndex });
+                if (val is Rect r)
+                {
+                    var p = tb.TranslatePoint(new Point(r.X, r.Y), sv);
+                    if (p != null)
+                    {
+                        caretY = p.Value.Y;
+                        return true;
+                    }
+                }
+            }
+            catch { /* ignore */ }
+        }
+
+        return false;
     }
 }
