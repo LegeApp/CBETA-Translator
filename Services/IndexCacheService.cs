@@ -35,8 +35,8 @@ public sealed class IndexCacheService
     private static void Log(string root, string message)
     {
         // You said console output works — we do both.
-        try { Console.WriteLine(message); } catch { /* ignore */ }
-
+       // try { Console.WriteLine(message); } catch { /* ignore */ }
+       /*
         try
         {
             File.AppendAllText(GetDebugLogPath(root),
@@ -47,6 +47,7 @@ public sealed class IndexCacheService
         {
             // ignore logging failures
         }
+       */
     }
 
     public async Task<IndexCache?> TryLoadAsync(string root)
