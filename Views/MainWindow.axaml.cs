@@ -63,6 +63,7 @@ public partial class MainWindow : Window
 
     // Cancel background work when user switches files quickly
     private CancellationTokenSource? _renderCts;
+    private bool _suppressNavSelectionChanged;
 
     public MainWindow()
     {
@@ -110,12 +111,16 @@ public partial class MainWindow : Window
             _searchView.Status += (_, msg) => SetStatus(msg);
             _searchView.OpenFileRequested += async (_, rel) =>
             {
+                // Keep nav selection in sync WITHOUT triggering a second load
+                SelectInNav(rel);
+
                 // Open file and jump to readable tab
                 await LoadPairAsync(rel);
 
                 if (_tabs != null)
                     _tabs.SelectedIndex = 0; // Readable tab
             };
+
         }
 
 
@@ -354,6 +359,44 @@ public partial class MainWindow : Window
         }
     }
 
+    private void SelectInNav(string relPath)
+    {
+        if (_filesList == null) return;
+        if (string.IsNullOrWhiteSpace(relPath)) return;
+
+        // Ensure the item exists in current filtered view; if not, try to re-filter.
+        var match = _filteredItems.FirstOrDefault(x =>
+            string.Equals(x.RelPath, relPath, StringComparison.OrdinalIgnoreCase));
+
+        if (match == null)
+        {
+            // If it’s filtered out by text search, clear the nav search so it becomes visible.
+            if (_navSearch != null && !string.IsNullOrWhiteSpace(_navSearch.Text))
+            {
+                _navSearch.Text = "";
+                ApplyFilter();
+
+                match = _filteredItems.FirstOrDefault(x =>
+                    string.Equals(x.RelPath, relPath, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        if (match == null)
+            return;
+
+        try
+        {
+            _suppressNavSelectionChanged = true;
+            _filesList.SelectedItem = match;
+            _filesList.ScrollIntoView(match);
+        }
+        finally
+        {
+            _suppressNavSelectionChanged = false;
+        }
+    }
+
+
     private void ClearViews()
     {
         _renderCts?.Cancel();
@@ -374,6 +417,9 @@ public partial class MainWindow : Window
 
     private async void FilesList_SelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
+        if (_suppressNavSelectionChanged)
+            return;
+
         if (_filesList?.SelectedItem is not FileNavItem item)
             return;
 
@@ -382,6 +428,7 @@ public partial class MainWindow : Window
 
         await LoadPairAsync(item.RelPath);
     }
+
 
     private async Task LoadPairAsync(string relPath)
     {

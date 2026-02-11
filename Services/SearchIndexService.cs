@@ -12,10 +12,104 @@ using CbetaTranslator.App.Models;
 
 namespace CbetaTranslator.App.Services;
 
+
 public sealed class SearchIndexService
 {
+    public sealed class SearchIndexServiceOptions
+    {
+        // TOTAL cache budget across all cached bloom pages (bytes).
+        // Each bloom page is BloomBytes (512 bytes in your current config).
+        public long MaxBloomCacheBytes { get; set; } = 40L * 1024 * 1024; // default 40MB
+    }
+
+    public SearchIndexServiceOptions Options { get; } = new();
+
+    // LRU cache for bloom pages (offset -> ulong[] bits)
+    private readonly Dictionary<long, LinkedListNode<(long key, ulong[] bits)>> _bloomCache = new();
+    private readonly LinkedList<(long key, ulong[] bits)> _bloomLru = new();
+    private long _bloomCacheBytes = 0;
+    private readonly object _bloomLock = new();
+
+
     private const string ManifestFileName = "search.index.manifest.json";
     private const string BinFileName = "search.index.bin";
+
+
+    // Helpers
+
+    private ulong[] GetBloomCached(FileStream fs, long offset)
+    {
+        // Cache key is the bloom offset in the bin file (unique per entry)
+        lock (_bloomLock)
+        {
+            if (_bloomCache.TryGetValue(offset, out var node))
+            {
+                _bloomLru.Remove(node);
+                _bloomLru.AddFirst(node);
+                return node.Value.bits;
+            }
+        }
+
+        // Miss: read from disk (outside lock)
+        var bits = ReadBloom(fs, offset);
+
+        // Insert + evict
+        long pageBytes = BloomBytes;
+
+        lock (_bloomLock)
+        {
+            // Another thread may have inserted meanwhile
+            if (_bloomCache.TryGetValue(offset, out var existing))
+            {
+                _bloomLru.Remove(existing);
+                _bloomLru.AddFirst(existing);
+                return existing.Value.bits;
+            }
+
+            var node = new LinkedListNode<(long key, ulong[] bits)>((offset, bits));
+            _bloomLru.AddFirst(node);
+            _bloomCache[offset] = node;
+            _bloomCacheBytes += pageBytes;
+
+            EvictBloomCacheIfNeeded();
+        }
+
+        return bits;
+    }
+
+    private void EvictBloomCacheIfNeeded()
+    {
+        long max = Math.Max(0, Options.MaxBloomCacheBytes);
+
+        // If budget is 0, effectively disable caching
+        if (max == 0)
+        {
+            _bloomCache.Clear();
+            _bloomLru.Clear();
+            _bloomCacheBytes = 0;
+            return;
+        }
+
+        while (_bloomCacheBytes > max && _bloomLru.Last != null)
+        {
+            var last = _bloomLru.Last!;
+            _bloomLru.RemoveLast();
+            _bloomCache.Remove(last.Value.key);
+            _bloomCacheBytes -= BloomBytes;
+        }
+    }
+
+    public void ClearBloomCache()
+    {
+        lock (_bloomLock)
+        {
+            _bloomCache.Clear();
+            _bloomLru.Clear();
+            _bloomCacheBytes = 0;
+        }
+    }
+
+
 
     // Small enough to keep in RAM, large enough to prune candidates aggressively
     private const int BloomBits = 4096;          // 4096 bits = 512 bytes
@@ -449,7 +543,8 @@ public sealed class SearchIndexService
                     continue;
 
                 // Load bloom bits for this doc and test all grams
-                var bits = ReadBloom(fs, e.BloomOffset);
+                var bits = GetBloomCached(fs, e.BloomOffset);
+
 
                 bool ok = true;
                 for (int i = 0; i < grams.Count; i++)
