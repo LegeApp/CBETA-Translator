@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     private ReadableTabView? _readableView;
     private TranslationTabView? _translationView;
     private SearchTabView? _searchView;
+    private GitTabView? _gitView;
 
     // Services
     private readonly IFileService _fileService = new FileService();
@@ -99,6 +100,7 @@ public partial class MainWindow : Window
         _readableView = this.FindControl<ReadableTabView>("ReadableView");
         _translationView = this.FindControl<TranslationTabView>("TranslationView");
         _searchView = this.FindControl<SearchTabView>("SearchView");
+        _gitView = this.FindControl<GitTabView>("GitView");
 
         if (_translationView != null)
         {
@@ -111,19 +113,34 @@ public partial class MainWindow : Window
             _searchView.Status += (_, msg) => SetStatus(msg);
             _searchView.OpenFileRequested += async (_, rel) =>
             {
-                // Keep nav selection in sync WITHOUT triggering a second load
                 SelectInNav(rel);
-
-                // Open file and jump to readable tab
                 await LoadPairAsync(rel);
 
                 if (_tabs != null)
                     _tabs.SelectedIndex = 0; // Readable tab
             };
-
         }
 
+        if (_gitView != null)
+        {
+            _gitView.Status += (_, msg) => SetStatus(msg);
 
+            // When Git tab clones/updates, it emits the repo root. Load it immediately.
+            _gitView.RootCloned += async (_, repoRoot) =>
+            {
+                try
+                {
+                    await LoadRootAsync(repoRoot, saveToConfig: true);
+
+                    if (_tabs != null)
+                        _tabs.SelectedIndex = 0; // bounce user back to Readable
+                }
+                catch (Exception ex)
+                {
+                    SetStatus("Failed to load cloned repo: " + ex.Message);
+                }
+            };
+        }
     }
 
     private void WireEvents()
@@ -210,6 +227,9 @@ public partial class MainWindow : Window
 
         AppPaths.EnsureTranslatedDirExists(_root);
 
+        // IMPORTANT: tell Git tab to default to this repo/root from now on
+        _gitView?.SetCurrentRepoRoot(_root);
+
         _searchView?.SetRootContext(_root, _originalDir, _translatedDir);
 
         if (saveToConfig)
@@ -220,7 +240,6 @@ public partial class MainWindow : Window
         await LoadFileListFromCacheOrBuildAsync();
     }
 
-
     private async Task LoadFileListFromCacheOrBuildAsync()
     {
         if (_root == null || _originalDir == null || _translatedDir == null || _filesList == null)
@@ -228,7 +247,6 @@ public partial class MainWindow : Window
 
         ClearViews();
 
-        // Helper: always re-wire SearchTab after we have _allItems
         void WireSearchTab()
         {
             if (_searchView == null) return;
@@ -239,7 +257,6 @@ public partial class MainWindow : Window
                 _translatedDir!,
                 fileMeta: relKey =>
                 {
-                    // Use canonical list for status + labels (cache keyed by relpath)
                     var canon = _allItems.FirstOrDefault(x =>
                         string.Equals(
                             NormalizeRelForLogs(x.RelPath),
@@ -249,7 +266,6 @@ public partial class MainWindow : Window
                     if (canon != null)
                         return (canon.DisplayShort, canon.Tooltip, canon.Status);
 
-                    // fallback
                     string rel = relKey;
                     return (rel, rel, null);
                 });
@@ -295,7 +311,6 @@ public partial class MainWindow : Window
         SetStatus($"Index cache created: {_allItems.Count:n0} files.");
     }
 
-
     private void ApplyFilter()
     {
         if (_filesList == null)
@@ -304,7 +319,6 @@ public partial class MainWindow : Window
         string q = (_navSearch?.Text ?? "").Trim();
         bool showFilenames = _chkShowFilenames?.IsChecked == true;
 
-        // preserve selection by relpath
         string? selectedRel =
             (_filesList.SelectedItem as FileNavItem)?.RelPath
             ?? _currentRelPath;
@@ -325,8 +339,6 @@ public partial class MainWindow : Window
             });
         }
 
-        // IMPORTANT: do not mutate the cache items.
-        // Project items for UI with DisplayShort computed from toggle.
         _filteredItems = seq.Select(it =>
         {
             var label =
@@ -348,7 +360,6 @@ public partial class MainWindow : Window
 
         _filesList.ItemsSource = _filteredItems;
 
-        // restore selection if possible
         if (!string.IsNullOrWhiteSpace(selectedRel))
         {
             var match = _filteredItems.FirstOrDefault(x =>
@@ -364,13 +375,11 @@ public partial class MainWindow : Window
         if (_filesList == null) return;
         if (string.IsNullOrWhiteSpace(relPath)) return;
 
-        // Ensure the item exists in current filtered view; if not, try to re-filter.
         var match = _filteredItems.FirstOrDefault(x =>
             string.Equals(x.RelPath, relPath, StringComparison.OrdinalIgnoreCase));
 
         if (match == null)
         {
-            // If it’s filtered out by text search, clear the nav search so it becomes visible.
             if (_navSearch != null && !string.IsNullOrWhiteSpace(_navSearch.Text))
             {
                 _navSearch.Text = "";
@@ -395,7 +404,6 @@ public partial class MainWindow : Window
             _suppressNavSelectionChanged = false;
         }
     }
-
 
     private void ClearViews()
     {
@@ -428,7 +436,6 @@ public partial class MainWindow : Window
 
         await LoadPairAsync(item.RelPath);
     }
-
 
     private async Task LoadPairAsync(string relPath)
     {
@@ -511,7 +518,6 @@ public partial class MainWindow : Window
             await _fileService.WriteTranslatedAsync(_translatedDir, _currentRelPath, xml);
             SetStatus("Saved translated XML: " + _currentRelPath);
 
-            // --- Live status refresh (red/yellow/green) ---
             try
             {
                 if (_root != null && _originalDir != null && _translatedDir != null && _currentRelPath != null)
@@ -534,7 +540,6 @@ public partial class MainWindow : Window
 
                     ApplyFilter();
 
-                    // best-effort persist cache
                     var cache = new IndexCache
                     {
                         Version = 2,

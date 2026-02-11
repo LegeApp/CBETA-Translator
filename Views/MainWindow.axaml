@@ -94,7 +94,11 @@
           <TabItem Header="Search">
             <views:SearchTabView Name="SearchView"/>
           </TabItem>
-		
+			
+		    <TabItem Header="Git">
+              <views:GitTabView Name="GitView"/>
+            </TabItem>
+
         </TabControl>
 
       </Border>

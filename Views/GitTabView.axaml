@@ -1,0 +1,75 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="CbetaTranslator.App.Views.GitTabView">
+
+	<Grid RowDefinitions="Auto,Auto,*" RowSpacing="10">
+
+		<!-- Top controls -->
+		<Border Grid.Row="0"
+				Background="#FF1E1E1E"
+				Padding="10"
+				CornerRadius="8">
+			<Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="10" RowDefinitions="Auto,Auto" RowSpacing="8">
+
+				<Button Name="BtnPickDest"
+						Grid.Row="0" Grid.Column="0"
+						Content="Pick Location"
+						Background="#33FFFFFF"/>
+
+				<Button Name="BtnGetFiles"
+						Grid.Row="0" Grid.Column="1"
+						Content="Get / Update Files"
+						Background="#33FFFFFF"/>
+
+				<Button Name="BtnCancel"
+						Grid.Row="0" Grid.Column="2"
+						HorizontalAlignment="Left"
+						Content="Cancel"
+						Background="#33FFFFFF"
+						IsEnabled="False"/>
+
+				<TextBlock Name="TxtDest"
+						   Grid.Row="1" Grid.Column="0"
+						   Grid.ColumnSpan="3"
+						   Foreground="#FFCCCCCC"
+						   TextWrapping="Wrap"
+						   Text="Location: (not set)"/>
+
+			</Grid>
+		</Border>
+
+		<!-- Progress -->
+		<Border Grid.Row="1"
+				Background="#FF202020"
+				BorderBrush="#FF303030"
+				BorderThickness="1"
+				CornerRadius="8"
+				Padding="8">
+			<TextBlock Name="TxtProgress"
+					   Foreground="#FFCCCCCC"
+					   TextWrapping="Wrap"
+					   Text="Ready."/>
+		</Border>
+
+		<!-- Log -->
+		<Border Grid.Row="2"
+				Background="#FF202020"
+				BorderBrush="#FF303030"
+				BorderThickness="1"
+				CornerRadius="8"
+				Padding="8">
+			<TextBox Name="TxtLog"
+					 IsReadOnly="True"
+					 AcceptsReturn="True"
+					 TextWrapping="NoWrap"
+					 FontFamily="Consolas"
+					 Background="#FF1A1A1A"
+					 Foreground="#FFEAEAEA"
+					 BorderBrush="#FF444444"
+					 BorderThickness="1"
+					 ScrollViewer.VerticalScrollBarVisibility="Auto"
+					 ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
+		</Border>
+
+	</Grid>
+</UserControl>
