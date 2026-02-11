@@ -623,8 +623,57 @@ public partial class ReadableTabView : UserControl
         int start = _matchStarts[_matchIndex];
         int len = _matchLen;
 
-        ApplyFindSelection(_findTarget, start, len, scroll);
+        // Always set highlight immediately (works when already on screen)
+        ApplyHighlight(_findTarget, start, len);
+
+        if (!scroll)
+            return;
+
+        try
+        {
+            _suppressPollingUntilUtc = DateTime.UtcNow.AddMilliseconds(420);
+            _ignoreProgrammaticUntilUtc = DateTime.UtcNow.AddMilliseconds(420);
+
+            _findTarget.Focus();
+
+            // Use caret to leverage your scroll helpers
+            _findTarget.CaretIndex = Math.Clamp(start, 0, (_findTarget.Text ?? "").Length);
+
+            bool targetIsChinese = ReferenceEquals(_findTarget, _editorOriginal);
+
+            // Scroll after layout tick
+            DispatcherTimer.RunOnce(() =>
+            {
+                try
+                {
+                    if (targetIsChinese) CenterByNewlines(_findTarget, start);
+                    else CenterByCaretRect(_findTarget, start);
+                }
+                catch { /* ignore */ }
+
+                // Re-apply highlight AFTER scrolling (overlay must recompute rect after offset)
+                ApplyHighlight(_findTarget, start, len);
+            }, TimeSpan.FromMilliseconds(25));
+
+            // One more repaint after render/layout settles (fixes "box below/offscreen" edge)
+            DispatcherTimer.RunOnce(() =>
+            {
+                try
+                {
+                    if (targetIsChinese) CenterByNewlines(_findTarget, start);
+                    else CenterByCaretRect(_findTarget, start);
+                }
+                catch { /* ignore */ }
+
+                ApplyHighlight(_findTarget, start, len);
+            }, TimeSpan.FromMilliseconds(85));
+        }
+        catch
+        {
+            // ignore
+        }
     }
+
 
     private void ApplyFindSelection(TextBox target, int start, int len, bool scroll)
     {
