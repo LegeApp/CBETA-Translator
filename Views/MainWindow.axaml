@@ -82,6 +82,7 @@
       <!-- Right side: Tabs -->
       <Border Grid.Column="2" Margin="8" Background="#00000000">
         <TabControl Name="MainTabs">
+			
           <TabItem Header="Readable">
             <views:ReadableTabView Name="ReadableView"/>
           </TabItem>
@@ -89,7 +90,13 @@
           <TabItem Header="Translate XML">
             <views:TranslationTabView Name="TranslationView"/>
           </TabItem>
+
+          <TabItem Header="Search">
+            <views:SearchTabView Name="SearchView"/>
+          </TabItem>
+		
         </TabControl>
+
       </Border>
 
     </Grid>

@@ -37,6 +37,7 @@ public partial class MainWindow : Window
     // Child views
     private ReadableTabView? _readableView;
     private TranslationTabView? _translationView;
+    private SearchTabView? _searchView;
 
     // Services
     private readonly IFileService _fileService = new FileService();
@@ -96,12 +97,28 @@ public partial class MainWindow : Window
 
         _readableView = this.FindControl<ReadableTabView>("ReadableView");
         _translationView = this.FindControl<TranslationTabView>("TranslationView");
+        _searchView = this.FindControl<SearchTabView>("SearchView");
 
         if (_translationView != null)
         {
             _translationView.SaveRequested += async (_, _) => await SaveTranslatedFromTabAsync();
             _translationView.Status += (_, msg) => SetStatus(msg);
         }
+
+        if (_searchView != null)
+        {
+            _searchView.Status += (_, msg) => SetStatus(msg);
+            _searchView.OpenFileRequested += async (_, rel) =>
+            {
+                // Open file and jump to readable tab
+                await LoadPairAsync(rel);
+
+                if (_tabs != null)
+                    _tabs.SelectedIndex = 0; // Readable tab
+            };
+        }
+
+
     }
 
     private void WireEvents()
@@ -188,16 +205,16 @@ public partial class MainWindow : Window
 
         AppPaths.EnsureTranslatedDirExists(_root);
 
+        _searchView?.SetRootContext(_root, _originalDir, _translatedDir);
+
         if (saveToConfig)
         {
-            await _configService.SaveAsync(new AppConfig
-            {
-                TextRootPath = _root
-            });
+            await _configService.SaveAsync(new AppConfig { TextRootPath = _root });
         }
 
         await LoadFileListFromCacheOrBuildAsync();
     }
+
 
     private async Task LoadFileListFromCacheOrBuildAsync()
     {
@@ -206,11 +223,41 @@ public partial class MainWindow : Window
 
         ClearViews();
 
-        var cache = await _indexCacheService.TryLoadAsync(_root);
-        if (cache != null && cache.Entries.Count > 0)
+        // Helper: always re-wire SearchTab after we have _allItems
+        void WireSearchTab()
         {
-            _allItems = cache.Entries ?? new List<FileNavItem>();
+            if (_searchView == null) return;
+
+            _searchView.SetContext(
+                _root!,
+                _originalDir!,
+                _translatedDir!,
+                fileMeta: relKey =>
+                {
+                    // Use canonical list for status + labels (cache keyed by relpath)
+                    var canon = _allItems.FirstOrDefault(x =>
+                        string.Equals(
+                            NormalizeRelForLogs(x.RelPath),
+                            NormalizeRelForLogs(relKey),
+                            StringComparison.OrdinalIgnoreCase));
+
+                    if (canon != null)
+                        return (canon.DisplayShort, canon.Tooltip, canon.Status);
+
+                    // fallback
+                    string rel = relKey;
+                    return (rel, rel, null);
+                });
+        }
+
+        var cache = await _indexCacheService.TryLoadAsync(_root);
+        if (cache != null && cache.Entries != null && cache.Entries.Count > 0)
+        {
+            _allItems = cache.Entries;
             ApplyFilter();
+
+            WireSearchTab();
+
             SetStatus($"Loaded index cache: {_allItems.Count:n0} files.");
             return;
         }
@@ -238,8 +285,11 @@ public partial class MainWindow : Window
         _allItems = built.Entries ?? new List<FileNavItem>();
         ApplyFilter();
 
+        WireSearchTab();
+
         SetStatus($"Index cache created: {_allItems.Count:n0} files.");
     }
+
 
     private void ApplyFilter()
     {
@@ -317,6 +367,7 @@ public partial class MainWindow : Window
 
         _readableView?.Clear();
         _translationView?.Clear();
+        _searchView?.Clear();
 
         UpdateSaveButtonState();
     }

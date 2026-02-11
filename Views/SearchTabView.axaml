@@ -1,0 +1,125 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:models="clr-namespace:CbetaTranslator.App.Models"
+             x:Class="CbetaTranslator.App.Views.SearchTabView">
+
+	<Grid RowDefinitions="Auto,Auto,*" RowSpacing="10">
+
+		<!-- Controls -->
+		<Border Grid.Row="0"
+				Background="#FF1E1E1E"
+				Padding="10"
+				CornerRadius="8">
+			<Grid ColumnDefinitions="*,Auto,Auto,Auto"
+				  RowDefinitions="Auto,Auto"
+				  ColumnSpacing="10"
+				  RowSpacing="8">
+
+				<TextBox Name="TxtQuery"
+						 Grid.Row="0"
+						 Grid.Column="0"
+						 Watermark="Search (CJK phrases, substrings)…"
+						 Background="#FF2B2B2B"
+						 Foreground="#FFEAEAEA"
+						 BorderBrush="#FF444444"
+						 BorderThickness="1"/>
+
+				<Button Name="BtnSearch"
+						Grid.Row="0"
+						Grid.Column="1"
+						Content="Search"
+						Background="#33FFFFFF"/>
+
+				<Button Name="BtnCancel"
+						Grid.Row="0"
+						Grid.Column="2"
+						Content="Cancel"
+						Background="#33FFFFFF"
+						IsEnabled="False"/>
+
+				<Button Name="BtnBuildIndex"
+						Grid.Row="0"
+						Grid.Column="3"
+						Content="Build/Update Index"
+						Background="#33FFFFFF"/>
+
+				<!-- Options row -->
+				<StackPanel Grid.Row="1"
+							Grid.Column="0"
+							Orientation="Horizontal"
+							Spacing="14">
+
+					<CheckBox Name="ChkOriginal" Content="Original" Foreground="#FFCCCCCC" IsChecked="True"/>
+					<CheckBox Name="ChkTranslated" Content="Translated" Foreground="#FFCCCCCC" IsChecked="False"/>
+
+					<TextBlock Text="Status:" Foreground="#FFCCCCCC" VerticalAlignment="Center" Margin="10,0,0,0"/>
+					<ComboBox Name="CmbStatus" Width="160"/>
+
+					<TextBlock Text="Context:" Foreground="#FFCCCCCC" VerticalAlignment="Center" Margin="10,0,0,0"/>
+					<ComboBox Name="CmbContext" Width="120"/>
+				</StackPanel>
+
+				<TextBlock Name="TxtProgress"
+						   Grid.Row="1"
+						   Grid.Column="1"
+						   Grid.ColumnSpan="3"
+						   Foreground="#FFCCCCCC"
+						   VerticalAlignment="Center"
+						   TextWrapping="Wrap"/>
+			</Grid>
+		</Border>
+
+		<!-- Summary bar -->
+		<Border Grid.Row="1"
+				Background="#FF202020"
+				BorderBrush="#FF303030"
+				BorderThickness="1"
+				CornerRadius="8"
+				Padding="8">
+			<DockPanel LastChildFill="True">
+				<TextBlock Name="TxtSummary"
+						   DockPanel.Dock="Left"
+						   Foreground="#FFCCCCCC"
+						   VerticalAlignment="Center"
+						   Text="Ready."/>
+				<Button Name="BtnExportTsv"
+						DockPanel.Dock="Right"
+						Content="Export TSV"
+						Background="#33FFFFFF"
+						IsEnabled="False"/>
+			</DockPanel>
+		</Border>
+
+		<!-- Results -->
+		<Border Grid.Row="2"
+				Background="#FF202020"
+				BorderBrush="#FF303030"
+				BorderThickness="1"
+				CornerRadius="8"
+				Padding="8">
+			<TreeView Name="ResultsTree"
+					  Background="#FF2B2B2B"
+					  BorderBrush="#FF444444"
+					  BorderThickness="1"
+					  Foreground="#FFEAEAEA">
+
+				<TreeView.DataTemplates>
+
+					<TreeDataTemplate DataType="models:SearchResultGroup" ItemsSource="{Binding Children}">
+						<TextBlock Text="{Binding HeaderText}"
+								   ToolTip.Tip="{Binding Tooltip}"
+								   TextWrapping="NoWrap"/>
+					</TreeDataTemplate>
+
+					<DataTemplate DataType="models:SearchResultChild">
+						<TextBlock Text="{Binding RowText}"
+								   TextWrapping="NoWrap"/>
+					</DataTemplate>
+
+				</TreeView.DataTemplates>
+
+			</TreeView>
+		</Border>
+
+	</Grid>
+</UserControl>
