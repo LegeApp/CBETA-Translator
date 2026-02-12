@@ -10,6 +10,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using CbetaTranslator.App.Models;
 using CbetaTranslator.App.Services;
+using CbetaTranslator.App.Infrastructure;
 
 namespace CbetaTranslator.App.Views;
 
@@ -17,6 +18,9 @@ public partial class ReadableTabView : UserControl
 {
     private TextBox? _editorOriginal;
     private TextBox? _editorTranslated;
+
+    private HoverDictionaryBehavior? _hoverDict;
+    private readonly ICedictDictionary _cedict = new CedictDictionaryService();
 
     private ScrollViewer? _svOriginal;
     private ScrollViewer? _svTranslated;
@@ -82,10 +86,16 @@ public partial class ReadableTabView : UserControl
         {
             _svOriginal = FindScrollViewer(_editorOriginal);
             _svTranslated = FindScrollViewer(_editorTranslated);
+
+            SetupHoverDictionary();
             StartSelectionTimer();
         };
 
-        DetachedFromVisualTree += (_, _) => StopSelectionTimer();
+        DetachedFromVisualTree += (_, _) =>
+        {
+            StopSelectionTimer();
+            DisposeHoverDictionary();
+        };
     }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
@@ -138,6 +148,21 @@ public partial class ReadableTabView : UserControl
         if (_btnCloseFind != null) _btnCloseFind.Click += (_, _) => CloseFind();
     }
 
+    private void SetupHoverDictionary()
+    {
+        // Only on original pane
+        if (_editorOriginal == null) return;
+
+        _hoverDict?.Dispose();
+        _hoverDict = new HoverDictionaryBehavior(_editorOriginal, _cedict);
+    }
+
+    private void DisposeHoverDictionary()
+    {
+        _hoverDict?.Dispose();
+        _hoverDict = null;
+    }
+
     public void Clear()
     {
         _renderOrig = RenderedDocument.Empty;
@@ -155,6 +180,8 @@ public partial class ReadableTabView : UserControl
 
         ClearFindState();
         CloseFind();
+
+        // keep behavior alive, just clear tooltip implicitly by leaving area
     }
 
     public void SetRendered(RenderedDocument orig, RenderedDocument tran)
@@ -195,7 +222,6 @@ public partial class ReadableTabView : UserControl
         tb.KeyDown += OnEditorUserInput;
         tb.KeyUp += OnEditorKeyUp;
 
-        // FIX: Don't let find-navigation focus changes trigger recompute/index reset
         tb.GotFocus += (_, _) =>
         {
             if (_findBar?.IsVisible == true && !_findIsApplyingSelection)
@@ -521,7 +547,6 @@ public partial class ReadableTabView : UserControl
         string hay = tb.Text ?? "";
         string q = (_findQuery?.Text ?? "").Trim();
 
-        // FIX: preserve current match anchor when resetToFirst == false
         int oldSelectedStart = -1;
         if (!resetToFirst && _matchIndex >= 0 && _matchIndex < _matchStarts.Count)
             oldSelectedStart = _matchStarts[_matchIndex];
@@ -563,7 +588,6 @@ public partial class ReadableTabView : UserControl
         }
         else
         {
-            // FIX: if we had a selected match before, keep it (or nearest)
             if (oldSelectedStart >= 0)
             {
                 int exact = _matchStarts.IndexOf(oldSelectedStart);
@@ -584,8 +608,6 @@ public partial class ReadableTabView : UserControl
         }
 
         UpdateFindCount();
-
-        // Keep highlight visible, but don't auto-scroll on recompute
         JumpToCurrentMatch(scroll: false);
     }
 
@@ -623,7 +645,6 @@ public partial class ReadableTabView : UserControl
         int start = _matchStarts[_matchIndex];
         int len = _matchLen;
 
-        // Always set highlight immediately (works when already on screen)
         ApplyHighlight(_findTarget, start, len);
 
         if (!scroll)
@@ -635,13 +656,10 @@ public partial class ReadableTabView : UserControl
             _ignoreProgrammaticUntilUtc = DateTime.UtcNow.AddMilliseconds(420);
 
             _findTarget.Focus();
-
-            // Use caret to leverage your scroll helpers
             _findTarget.CaretIndex = Math.Clamp(start, 0, (_findTarget.Text ?? "").Length);
 
             bool targetIsChinese = ReferenceEquals(_findTarget, _editorOriginal);
 
-            // Scroll after layout tick
             DispatcherTimer.RunOnce(() =>
             {
                 try
@@ -649,13 +667,11 @@ public partial class ReadableTabView : UserControl
                     if (targetIsChinese) CenterByNewlines(_findTarget, start);
                     else CenterByCaretRect(_findTarget, start);
                 }
-                catch { /* ignore */ }
+                catch { }
 
-                // Re-apply highlight AFTER scrolling (overlay must recompute rect after offset)
                 ApplyHighlight(_findTarget, start, len);
             }, TimeSpan.FromMilliseconds(25));
 
-            // One more repaint after render/layout settles (fixes "box below/offscreen" edge)
             DispatcherTimer.RunOnce(() =>
             {
                 try
@@ -663,7 +679,7 @@ public partial class ReadableTabView : UserControl
                     if (targetIsChinese) CenterByNewlines(_findTarget, start);
                     else CenterByCaretRect(_findTarget, start);
                 }
-                catch { /* ignore */ }
+                catch { }
 
                 ApplyHighlight(_findTarget, start, len);
             }, TimeSpan.FromMilliseconds(85));
@@ -671,76 +687,6 @@ public partial class ReadableTabView : UserControl
         catch
         {
             // ignore
-        }
-    }
-
-
-    private void ApplyFindSelection(TextBox target, int start, int len, bool scroll)
-    {
-        string text = target.Text ?? "";
-        if (text.Length == 0 || len <= 0) return;
-
-        start = Math.Clamp(start, 0, text.Length);
-        int end = Math.Clamp(start + len, 0, text.Length);
-
-        bool targetIsChinese = ReferenceEquals(target, _editorOriginal);
-
-        try
-        {
-            _findIsApplyingSelection = true;
-
-            _suppressPollingUntilUtc = DateTime.UtcNow.AddMilliseconds(500);
-            _ignoreProgrammaticUntilUtc = DateTime.UtcNow.AddMilliseconds(500);
-            _suppressMirrorUntilUtc = DateTime.UtcNow.AddMilliseconds(SuppressMirrorAfterFindMs);
-
-            target.SelectionStart = start;
-            target.SelectionEnd = end;
-
-            try { target.CaretIndex = start; } catch { /* ignore */ }
-
-            ApplyHighlight(target, start, len);
-
-            if (ReferenceEquals(target, _editorOriginal))
-            {
-                _lastOrigSelStart = target.SelectionStart;
-                _lastOrigSelEnd = target.SelectionEnd;
-                _lastOrigCaret = target.CaretIndex;
-            }
-            else if (ReferenceEquals(target, _editorTranslated))
-            {
-                _lastTranSelStart = target.SelectionStart;
-                _lastTranSelEnd = target.SelectionEnd;
-                _lastTranCaret = target.CaretIndex;
-            }
-
-            if (!scroll)
-                return;
-
-            target.Focus();
-
-            DispatcherTimer.RunOnce(() =>
-            {
-                try
-                {
-                    if (targetIsChinese) CenterByNewlines(target, start);
-                    else CenterByCaretRect(target, start);
-                }
-                catch { /* ignore */ }
-            }, TimeSpan.FromMilliseconds(25));
-
-            DispatcherTimer.RunOnce(() =>
-            {
-                try
-                {
-                    if (targetIsChinese) CenterByNewlines(target, start);
-                    else CenterByCaretRect(target, start);
-                }
-                catch { /* ignore */ }
-            }, TimeSpan.FromMilliseconds(70));
-        }
-        finally
-        {
-            DispatcherTimer.RunOnce(() => _findIsApplyingSelection = false, TimeSpan.FromMilliseconds(70));
         }
     }
 
@@ -901,7 +847,7 @@ public partial class ReadableTabView : UserControl
                 }
             }
         }
-        catch { /* ignore */ }
+        catch { }
 
         var mTb = tb.GetType().GetMethod("GetRectFromCharacterIndex", new[] { typeof(int) });
         if (mTb != null)
@@ -919,7 +865,7 @@ public partial class ReadableTabView : UserControl
                     }
                 }
             }
-            catch { /* ignore */ }
+            catch { }
         }
 
         return false;

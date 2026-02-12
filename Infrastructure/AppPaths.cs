@@ -2,7 +2,7 @@
 
 namespace CbetaTranslator.App.Infrastructure;
 
-public static class AppPaths
+public partial class AppPaths
 {
     public const string OriginalFolderName = "xml-p5";
     public const string TranslatedFolderName = "xml-p5t";
