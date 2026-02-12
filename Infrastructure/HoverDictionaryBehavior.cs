@@ -10,6 +10,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Media;
 using Avalonia.Media.TextFormatting;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -18,13 +19,6 @@ using CbetaTranslator.App.Services;
 
 namespace CbetaTranslator.App.Infrastructure;
 
-/// <summary>
-/// Hover dictionary behavior for Avalonia TextBox:
-/// - Does NOT touch selection/caret intentionally.
-/// - Uses TextPresenter.TextLayout.HitTestPoint(in Point) (Avalonia 11.x).
-/// - IMPORTANT: We DO NOT require IsInside==true. TextPosition is still valid in margins.
-/// - Loads dictionary once; after load completes it re-runs lookup using the last pointer position.
-/// </summary>
 public sealed class HoverDictionaryBehavior : IDisposable
 {
     private readonly TextBox _tb;
@@ -48,10 +42,17 @@ public sealed class HoverDictionaryBehavior : IDisposable
 
     // knobs
     private const int DebounceMs = 140;
-    private const int MaxLenDefault = 12;
-    private const int MaxSensesShown = 3;
+    private const int MaxLenDefault = 19; // your dict can do 19 anyway
+    private const int MaxEntriesShown = 10;
+    private const int MaxSensesPerEntry = 3;
 
     private const bool DebugHover = true;
+
+    // colors (tweak freely)
+    private static readonly IBrush BrushHeadword = new SolidColorBrush(Color.FromRgb(255, 235, 130)); // warm yellow
+    private static readonly IBrush BrushPinyin = new SolidColorBrush(Color.FromRgb(170, 210, 255)); // soft blue
+    private static readonly IBrush BrushSense = new SolidColorBrush(Color.FromRgb(220, 220, 220)); // light gray
+    private static readonly IBrush BrushMeta = new SolidColorBrush(Color.FromRgb(155, 155, 155)); // dim
 
     public HoverDictionaryBehavior(TextBox tb, ICedictDictionary cedict)
     {
@@ -137,13 +138,11 @@ public sealed class HoverDictionaryBehavior : IDisposable
     {
         _sv ??= _tb.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
 
-        // Prefer the actual TextPresenter
         _presenter = _tb
             .GetVisualDescendants()
             .OfType<Visual>()
             .LastOrDefault(v => string.Equals(v.GetType().Name, "TextPresenter", StringComparison.Ordinal));
 
-        // Fallback: something text-ish
         _presenter ??= _tb
             .GetVisualDescendants()
             .OfType<Visual>()
@@ -189,7 +188,7 @@ public sealed class HoverDictionaryBehavior : IDisposable
 
         if (!_cedict.IsLoaded)
         {
-            ShowTooltip("Loading dictionary…");
+            ShowTooltip(BuildLoadingTooltip());
 
             if (!_loadKickoff)
             {
@@ -209,7 +208,8 @@ public sealed class HoverDictionaryBehavior : IDisposable
                     catch (OperationCanceledException) { return; }
                     catch (Exception ex)
                     {
-                        await Dispatcher.UIThread.InvokeAsync(() => ShowTooltip("CEDICT load failed:\n" + ex.Message));
+                        await Dispatcher.UIThread.InvokeAsync(() =>
+                            ShowTooltip(BuildErrorTooltip("CEDICT load failed", ex.Message)));
                         return;
                     }
 
@@ -253,7 +253,7 @@ public sealed class HoverDictionaryBehavior : IDisposable
             if (_lastKeyShown == match.Headword) return;
 
             _lastKeyShown = match.Headword;
-            ShowTooltip(FormatMatch(match));
+            ShowTooltip(BuildTooltipForMatch(match));
             return;
         }
 
@@ -263,7 +263,7 @@ public sealed class HoverDictionaryBehavior : IDisposable
             if (_lastKeyShown == head) return;
 
             _lastKeyShown = head;
-            ShowTooltip(FormatEntries(head, entries));
+            ShowTooltip(BuildTooltipForEntries(head, entries));
             return;
         }
 
@@ -287,7 +287,6 @@ public sealed class HoverDictionaryBehavior : IDisposable
         if (DebugHover)
             Debug.WriteLine($"[HOVER] CoordMap(direct): tb={pointInTextBox} pres={pPresenter}");
 
-        // ✅ Primary path: TextLayout hit test
         int idx = TryHitTestViaTextLayout(_presenter, pPresenter, text.Length);
         if (idx >= 0)
         {
@@ -295,7 +294,6 @@ public sealed class HoverDictionaryBehavior : IDisposable
             return idx;
         }
 
-        // Fallback: keep last index if we have it (prevents flicker when hit test fails intermittently)
         if (_lastIndex >= 0 && _lastIndex < text.Length)
             return _lastIndex;
 
@@ -317,11 +315,9 @@ public sealed class HoverDictionaryBehavior : IDisposable
             if (layoutObj is not TextLayout tl)
                 return -1;
 
-            // HitTestPoint(in Point) returns TextHitTestResult
             var r = tl.HitTestPoint(pPresenter);
 
-            // ⭐ Key fix:
-            // Do NOT require IsInside. TextPosition is still meaningful (nearest hit).
+            // Do NOT require IsInside. TextPosition is still the nearest hit.
             int idx = r.TextPosition + (r.IsTrailing ? 1 : 0);
 
             if (DebugHover)
@@ -329,7 +325,6 @@ public sealed class HoverDictionaryBehavior : IDisposable
 
             if (textLen <= 0) return -1;
 
-            // Clamp to actual text range
             if (idx < 0) idx = 0;
             if (idx >= textLen) idx = textLen - 1;
 
@@ -349,7 +344,6 @@ public sealed class HoverDictionaryBehavior : IDisposable
 
         if (_presenter == null) return false;
 
-        // Direct mapping (usually works)
         var direct = _tb.TranslatePoint(pointInTextBox, _presenter);
         if (direct != null)
         {
@@ -357,7 +351,6 @@ public sealed class HoverDictionaryBehavior : IDisposable
             return true;
         }
 
-        // Fallback with ScrollViewer compensation
         if (_sv == null) return false;
 
         var pSv = _tb.TranslatePoint(pointInTextBox, _sv);
@@ -372,12 +365,11 @@ public sealed class HoverDictionaryBehavior : IDisposable
         return true;
     }
 
-    private void ShowTooltip(string text)
-    {
-        if (DebugHover)
-            Debug.WriteLine($"[HOVER] ShowTooltip: {text.Split('\n').FirstOrDefault()}");
+    // -------------------------- TOOLTIP UI --------------------------
 
-        ToolTip.SetTip(_tb, text);
+    private void ShowTooltip(Control content)
+    {
+        ToolTip.SetTip(_tb, content);
         ToolTip.SetIsOpen(_tb, true);
     }
 
@@ -387,42 +379,107 @@ public sealed class HoverDictionaryBehavior : IDisposable
         ToolTip.SetTip(_tb, null);
     }
 
-    private static string FormatMatch(CedictMatch match)
+    private static Control BuildLoadingTooltip()
     {
-        var groups = match.Entries
-            .GroupBy(e => (e.Pinyin ?? "").Trim(), StringComparer.OrdinalIgnoreCase)
-            .OrderByDescending(g => g.Count());
-
-        var sb = new StringBuilder();
-        sb.AppendLine(match.Headword.Trim());
-
-        int pCount = 0;
-        foreach (var g in groups)
+        return BuildTooltipContainer(new[]
         {
-            if (pCount >= 2) break;
-
-            var pin = string.IsNullOrWhiteSpace(g.Key) ? "(no pinyin)" : g.Key;
-            sb.AppendLine(pin);
-
-            var senses = g
-                .SelectMany(e => e.Senses ?? Array.Empty<string>())
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .Select(s => s.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(MaxSensesShown);
-
-            foreach (var s in senses)
-                sb.AppendLine("• " + s);
-
-            pCount++;
-            if (pCount < 2) sb.AppendLine();
-        }
-
-        return sb.ToString().TrimEnd();
+            MakeLine("Loading dictionary…", BrushMeta, isBold:false)
+        });
     }
 
-    private static string FormatEntries(string headword, IReadOnlyList<CedictEntry> entries)
-        => FormatMatch(new CedictMatch(headword, 0, headword.Length, entries));
+    private static Control BuildErrorTooltip(string title, string message)
+    {
+        return BuildTooltipContainer(new[]
+        {
+            MakeLine(title, BrushHeadword, isBold:true),
+            MakeLine(message, BrushSense, isBold:false)
+        });
+    }
+
+    private static Control BuildTooltipForEntries(string headword, IReadOnlyList<CedictEntry> entries)
+        => BuildTooltipForMatch(new CedictMatch(headword, 0, headword.Length, entries));
+
+    private static Control BuildTooltipForMatch(CedictMatch match)
+    {
+        // Up to 10 entries, with up to N senses each.
+        var entries = match.Entries
+            .Where(e => e != null)
+            .Take(MaxEntriesShown)
+            .ToList();
+
+        var lines = new List<TextBlock>();
+
+        // header
+        lines.Add(MakeLine(match.Headword.Trim(), BrushHeadword, isBold: true));
+
+        if (entries.Count == 0)
+        {
+            lines.Add(MakeLine("(no entries)", BrushMeta, false));
+            return BuildTooltipContainer(lines);
+        }
+
+        // entry blocks
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var e = entries[i];
+
+            string pin = string.IsNullOrWhiteSpace(e.Pinyin) ? "(no pinyin)" : e.Pinyin.Trim();
+            lines.Add(MakeLine(pin, BrushPinyin, isBold: false));
+
+            var senses = (e.Senses ?? Array.Empty<string>())
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s.Trim())
+                .Take(MaxSensesPerEntry)
+                .ToList();
+
+            foreach (var s in senses)
+                lines.Add(MakeLine("• " + s, BrushSense, isBold: false));
+
+            if (i < entries.Count - 1)
+                lines.Add(MakeLine(" ", BrushMeta, false)); // spacer
+        }
+
+        // footer when truncated
+        if (match.Entries.Count > MaxEntriesShown)
+            lines.Add(MakeLine($"…and {match.Entries.Count - MaxEntriesShown} more", BrushMeta, false));
+
+        return BuildTooltipContainer(lines);
+    }
+
+    private static Control BuildTooltipContainer(IEnumerable<TextBlock> lines)
+    {
+        var panel = new StackPanel
+        {
+            Spacing = 2
+        };
+
+        foreach (var l in lines)
+            panel.Children.Add(l);
+
+        return new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(25, 25, 25)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(10),
+            Child = panel,
+            MaxWidth = 520
+        };
+    }
+
+    private static TextBlock MakeLine(string text, IBrush fg, bool isBold)
+    {
+        return new TextBlock
+        {
+            Text = text,
+            Foreground = fg,
+            FontWeight = isBold ? FontWeight.SemiBold : FontWeight.Normal,
+            TextWrapping = TextWrapping.Wrap
+        };
+    }
+
+    // -------------------------- misc --------------------------
 
     private static bool IsCjk(char c)
     {
