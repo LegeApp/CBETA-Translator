@@ -5,49 +5,28 @@
 
 	<Grid RowDefinitions="Auto,Auto,*" ColumnDefinitions="1*,Auto,1*">
 
-		<!-- Button bar -->
 		<Border Grid.Row="0"
 				Grid.ColumnSpan="3"
-				Background="#FF1E1E1E"
+				Background="{DynamicResource PanelAltBg}"
 				Padding="8"
 				CornerRadius="6">
 			<StackPanel Orientation="Horizontal" Spacing="8">
-				<Button Name="BtnCopyPrompt"
-						Focusable="False"
-						Content="Copy selection + prompt"
-						Background="#33FFFFFF"/>
-
-				<Button Name="BtnPasteReplace"
-						Focusable="False"
-						Content="Paste replace selection"
-						Background="#33FFFFFF"/>
-
-				<Button Name="BtnSelectNext50Tags"
-						Focusable="False"
-						Content="Select next 100 tags"
-						Background="#33FFFFFF"/>
-
-				<Button Name="BtnSaveTranslated"
-						Focusable="False"
-						Content="Save translated XML"
-						Background="#33FFFFFF"/>
-
-				<Button Name="BtnCheckXml"
-						Content="Check XML (hacky)"
-						Background="#33FFFFFF"/>
-
+				<Button Name="BtnCopyPrompt" Focusable="False" Content="Copy selection + prompt"/>
+				<Button Name="BtnPasteReplace" Focusable="False" Content="Paste replace selection"/>
+				<Button Name="BtnSelectNext50Tags" Focusable="False" Content="Select next 100 tags"/>
+				<Button Name="BtnSaveTranslated" Focusable="False" Content="Save translated XML"/>
+				<Button Name="BtnCheckXml" Content="Check XML (hacky)"/>
 				<TextBlock Name="TxtHint"
-						   Foreground="#FFCCCCCC"
 						   VerticalAlignment="Center"
-						   Margin="8,0,0,0"/>
+						   Margin="8,0,0,0"
+						   Classes="muted"/>
 			</StackPanel>
 		</Border>
 
-		<!-- Ctrl+F Search Bar -->
 		<Border Name="FindBar"
 				Grid.Row="1"
 				Grid.ColumnSpan="3"
-				Background="#CC1E1E1E"
+				Background="{DynamicResource PanelAltBg}"
 				Padding="8"
 				CornerRadius="8"
 				Margin="0,8,0,0"
@@ -55,43 +34,38 @@
 			<DockPanel LastChildFill="True">
 				<TextBlock Name="FindScope"
 						   DockPanel.Dock="Left"
-						   Foreground="#FFCCCCCC"
+						   Classes="muted"
 						   VerticalAlignment="Center"
 						   Margin="0,0,10,0"
 						   Text="Find:" />
 
 				<TextBox Name="FindQuery"
 						 Watermark="Find…"
-						 Background="#FF2B2B2B"
-						 Foreground="#FFEAEAEA"
-						 BorderBrush="#FF444444"
-						 BorderThickness="1"
 						 MinWidth="260"
 						 VerticalAlignment="Center"/>
 
 				<StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8" Margin="10,0,0,0">
 					<TextBlock Name="FindCount"
-							   Foreground="#FFCCCCCC"
+							   Classes="muted"
 							   VerticalAlignment="Center"
 							   Text="0/0" />
 
-					<Button Name="BtnPrev" Focusable="False" Content="Prev" Background="#33FFFFFF" />
-					<Button Name="BtnNext" Focusable="False" Content="Next" Background="#33FFFFFF" />
-					<Button Name="BtnCloseFind" Focusable="False" Content="✕" Background="#33FFFFFF" />
+					<Button Name="BtnPrev" Focusable="False" Content="Prev"/>
+					<Button Name="BtnNext" Focusable="False" Content="Next"/>
+					<Button Name="BtnCloseFind" Focusable="False" Content="✕"/>
 				</StackPanel>
 			</DockPanel>
 		</Border>
 
-		<!-- Left: Original XML -->
 		<Border Grid.Row="2" Grid.Column="0"
 				Margin="0,8,6,0"
-				Background="#FF202020"
-				BorderBrush="#FF303030"
+				Background="{DynamicResource PanelBg}"
+				BorderBrush="{DynamicResource PanelBorder}"
 				BorderThickness="1"
 				CornerRadius="6">
 			<Grid RowDefinitions="Auto,*">
-				<Border Background="#FF202020" Padding="8">
-					<TextBlock Text="Original XML (read-only)" Foreground="#FFCCCCCC"/>
+				<Border Background="{DynamicResource PanelBg}" Padding="8">
+					<TextBlock Text="Original XML (read-only)" Classes="muted"/>
 				</Border>
 
 				<Grid Grid.Row="1">
@@ -100,6 +74,8 @@
 							 AcceptsReturn="True"
 							 TextWrapping="NoWrap"
 							 FontFamily="Consolas"
+							 Background="Transparent"
+							 BorderThickness="0"
 							 ScrollViewer.VerticalScrollBarVisibility="Visible"
 							 ScrollViewer.HorizontalScrollBarVisibility="Visible"/>
 
@@ -112,19 +88,18 @@
 		<GridSplitter Grid.Row="2"
 					  Grid.Column="1"
 					  Width="6"
-					  Background="#FF444444"
+					  Background="{DynamicResource SplitterBrush}"
 					  Margin="0,8,0,0"/>
 
-		<!-- Right: Translated XML -->
 		<Border Grid.Row="2" Grid.Column="2"
 				Margin="6,8,0,0"
-				Background="#FF202020"
-				BorderBrush="#FF303030"
+				Background="{DynamicResource PanelBg}"
+				BorderBrush="{DynamicResource PanelBorder}"
 				BorderThickness="1"
 				CornerRadius="6">
 			<Grid RowDefinitions="Auto,*">
-				<Border Background="#FF202020" Padding="8">
-					<TextBlock Text="Translated XML (editable)" Foreground="#FFCCCCCC"/>
+				<Border Background="{DynamicResource PanelBg}" Padding="8">
+					<TextBlock Text="Translated XML (editable)" Classes="muted"/>
 				</Border>
 
 				<Grid Grid.Row="1">
@@ -133,6 +108,8 @@
 							 AcceptsReturn="True"
 							 TextWrapping="NoWrap"
 							 FontFamily="Consolas"
+							 Background="Transparent"
+							 BorderThickness="0"
 							 ScrollViewer.VerticalScrollBarVisibility="Visible"
 							 ScrollViewer.HorizontalScrollBarVisibility="Visible"/>
 

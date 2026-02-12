@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.IO;
 using System.Diagnostics;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
@@ -14,6 +15,7 @@ using CbetaTranslator.App.Infrastructure;
 using CbetaTranslator.App.Models;
 using CbetaTranslator.App.Services;
 using CbetaTranslator.App.Text;
+using Avalonia.Styling;
 
 namespace CbetaTranslator.App.Views;
 
@@ -24,9 +26,7 @@ public partial class MainWindow : Window
     private Button? _btnSave;
     private Button? _btnLicenses;
 
-    // NEW: global add note
     private Button? _btnAddCommunityNote;
-
 
     private Border? _navPanel;
     private ListBox? _filesList;
@@ -44,11 +44,12 @@ public partial class MainWindow : Window
     private SearchTabView? _searchView;
     private GitTabView? _gitView;
 
+    // NEW: theme toggle
+    private CheckBox? _chkNightMode;
+
     private readonly IFileService _fileService = new FileService();
     private readonly AppConfigService _configService = new AppConfigService();
     private readonly IndexCacheService _indexCacheService = new IndexCacheService();
-
-    // NEW: runtime cache for expensive readable rendering
     private readonly RenderedDocumentCacheService _renderCache = new RenderedDocumentCacheService(maxEntries: 48);
 
     private string? _root;
@@ -75,6 +76,9 @@ public partial class MainWindow : Window
         SetStatus("Ready.");
         UpdateSaveButtonState();
 
+        // Apply theme according to checkbox (defaults to checked in XAML)
+        ApplyTheme(dark: _chkNightMode?.IsChecked == true);
+
         _ = TryAutoLoadRootFromConfigAsync();
     }
 
@@ -86,10 +90,7 @@ public partial class MainWindow : Window
         _btnOpenRoot = this.FindControl<Button>("BtnOpenRoot");
         _btnSave = this.FindControl<Button>("BtnSave");
         _btnLicenses = this.FindControl<Button>("BtnLicenses");
-
-        // NEW
         _btnAddCommunityNote = this.FindControl<Button>("BtnAddCommunityNote");
-
 
         _navPanel = this.FindControl<Border>("NavPanel");
         _filesList = this.FindControl<ListBox>("FilesList");
@@ -107,21 +108,18 @@ public partial class MainWindow : Window
         _searchView = this.FindControl<SearchTabView>("SearchView");
         _gitView = this.FindControl<GitTabView>("GitView");
 
+        // NEW
+        _chkNightMode = this.FindControl<CheckBox>("ChkNightMode");
+
         if (_readableView != null)
             _readableView.Status += (_, msg) => SetStatus(msg);
 
-        // -----------------------------
-        // Translation tab wiring
-        // -----------------------------
         if (_translationView != null)
         {
             _translationView.SaveRequested += async (_, _) => await SaveTranslatedFromTabAsync();
             _translationView.Status += (_, msg) => SetStatus(msg);
         }
 
-        // -----------------------------
-        // Readable tab wiring (COMMUNITY NOTES)
-        // -----------------------------
         if (_readableView != null)
         {
             _readableView.CommunityNoteInsertRequested += (_, req) =>
@@ -131,9 +129,6 @@ public partial class MainWindow : Window
                 _ = DeleteCommunityNoteAsync(req.XmlStart, req.XmlEndExclusive);
         }
 
-        // -----------------------------
-        // Search tab wiring
-        // -----------------------------
         if (_searchView != null)
         {
             _searchView.Status += (_, msg) => SetStatus(msg);
@@ -147,9 +142,6 @@ public partial class MainWindow : Window
             };
         }
 
-        // -----------------------------
-        // Git tab wiring
-        // -----------------------------
         if (_gitView != null)
         {
             _gitView.Status += (_, msg) => SetStatus(msg);
@@ -178,11 +170,9 @@ public partial class MainWindow : Window
         if (_btnSave != null) _btnSave.Click += Save_Click;
         if (_btnLicenses != null) _btnLicenses.Click += Licenses_Click;
 
-        // NEW
         if (_btnAddCommunityNote != null) _btnAddCommunityNote.Click += AddCommunityNote_Click;
 
         if (_filesList != null) _filesList.SelectionChanged += FilesList_SelectionChanged;
-
         if (_tabs != null) _tabs.SelectionChanged += (_, _) => UpdateSaveButtonState();
 
         if (_navSearch != null)
@@ -190,7 +180,51 @@ public partial class MainWindow : Window
 
         if (_chkShowFilenames != null)
             _chkShowFilenames.IsCheckedChanged += (_, _) => ApplyFilter();
+
+        // NEW: theme checkbox
+        if (_chkNightMode != null)
+            _chkNightMode.IsCheckedChanged += (_, _) => ApplyTheme(dark: _chkNightMode.IsChecked == true);
     }
+
+    // IMPORTANT: parameter name is "dark" so ApplyTheme(dark: true) compiles.
+    private void ApplyTheme(bool dark)
+    {
+        string p = dark ? "Night_" : "Light_";
+
+        void Map(string tokenKey, string sourceKey)
+        {
+            // Look up resources from the current window/theme dictionaries
+            if (this.TryGetResource(sourceKey, null, out var v) && v != null)
+                Resources[tokenKey] = v; // store REAL brush/value
+        }
+
+        Map("AppBg", p + "AppBg");
+        Map("BarBg", p + "BarBg");
+        Map("NavBg", p + "NavBg");
+
+        Map("TextFg", p + "TextFg");
+        Map("TextMutedFg", p + "TextMutedFg");
+
+        Map("ControlBg", p + "ControlBg");
+        Map("ControlBgHover", p + "ControlBgHover");
+        Map("ControlBgFocus", p + "ControlBgFocus");
+
+        Map("BorderBrush", p + "BorderBrush");
+
+        Map("BtnBg", p + "BtnBg");
+        Map("BtnBgHover", p + "BtnBgHover");
+        Map("BtnBgPressed", p + "BtnBgPressed");
+        Map("BtnFg", p + "BtnFg");
+
+        Map("TabBg", p + "TabBg");
+        Map("TabBgSelected", p + "TabBgSelected");
+        Map("TabFgSelected", p + "TabFgSelected");
+
+        Map("TooltipBg", p + "TooltipBg");
+        Map("TooltipBorder", p + "TooltipBorder");
+        Map("TooltipFg", p + "TooltipFg");
+    }
+
 
     private async void AddCommunityNote_Click(object? sender, RoutedEventArgs e)
     {
@@ -225,8 +259,6 @@ public partial class MainWindow : Window
             SetStatus("Add note failed: " + ex.Message);
         }
     }
-
-
 
     private void ToggleNav_Click(object? sender, RoutedEventArgs e)
     {

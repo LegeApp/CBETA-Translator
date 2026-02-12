@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="CbetaTranslator.App.Views.LicensesWindow"
         Width="860" Height="640"
-        Background="#FF111111"
+        Background="{DynamicResource AppBg}"
         Title="Licenses &amp; Attributions"
         WindowStartupLocation="CenterOwner">
 
@@ -11,17 +11,16 @@
 		<StackPanel Spacing="6">
 			<TextBlock Text="Licenses &amp; Attributions"
 					   FontSize="20"
-					   FontWeight="SemiBold"
-					   Foreground="#FFEAEAEA"/>
+					   FontWeight="SemiBold"/>
 
 			<TextBlock Text="Dictionary data attribution is shown below (taken from the shipped dictionary file header)."
-					   Foreground="#FFBDBDBD"
+					   Classes="muted"
 					   TextWrapping="Wrap"/>
 		</StackPanel>
 
 		<Border Grid.Row="1"
-				Background="#FF1A1A1A"
-				BorderBrush="#FF303030"
+				Background="{DynamicResource PanelBg}"
+				BorderBrush="{DynamicResource PanelBorder}"
 				BorderThickness="1"
 				CornerRadius="8"
 				Padding="10">
@@ -30,8 +29,7 @@
 					 IsReadOnly="True"
 					 AcceptsReturn="True"
 					 TextWrapping="Wrap"
-					 Background="#00000000"
-					 Foreground="#FFEAEAEA"
+					 Background="Transparent"
 					 BorderThickness="0"
 					 FontFamily="Consolas"
 					 ScrollViewer.VerticalScrollBarVisibility="Auto"
@@ -41,15 +39,14 @@
 		<DockPanel Grid.Row="2" LastChildFill="False">
 			<TextBlock Name="TxtHint"
 					   DockPanel.Dock="Left"
-					   Foreground="#FF9E9E9E"
+					   Classes="muted"
 					   VerticalAlignment="Center"/>
 
 			<Button Name="BtnClose"
 					DockPanel.Dock="Right"
 					Width="120"
 					Height="34"
-					Content="Close"
-					Background="#33FFFFFF"/>
+					Content="Close"/>
 		</DockPanel>
 
 	</Grid>

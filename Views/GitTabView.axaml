@@ -8,32 +8,31 @@
 		  RowSpacing="8"
 		  ColumnSpacing="8">
 
-		<!-- Location -->
 		<TextBlock Grid.Row="0" Grid.Column="0" Name="TxtDest" Text="Location:" VerticalAlignment="Center"/>
 		<StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8">
-			<Button Name="BtnPickDest" Content="Pick Location" />
-			<Button Name="BtnGetFiles" Content="Update Files" />
+			<Button Name="BtnPickDest" Content="Pick Location"/>
+			<Button Name="BtnGetFiles" Content="Update Files"/>
 			<Button Name="BtnCancel" Content="Cancel" IsEnabled="False"/>
 		</StackPanel>
 
-		<!-- Selected -->
 		<TextBlock Grid.Row="1" Grid.ColumnSpan="2" Name="TxtSelected" Text="Selected: (none)" />
 
-		<!-- Commit message -->
 		<StackPanel Grid.Row="2" Grid.ColumnSpan="2" Orientation="Vertical" Spacing="4">
 			<TextBlock Text="Commit message"/>
 			<TextBox Name="TxtCommitMessage" Watermark="What did you change?" />
 		</StackPanel>
 
-		<!-- Actions -->
 		<StackPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="8">
-			<Button Name="BtnSendContribution" Content="1) Create local commit (single file)" />
-			<Button Name="BtnAuth" Content="2) Authorize GitHub" />
-			<Button Name="BtnPushPr" Content="3) Push + Create PR" />
+			<Button Name="BtnSendContribution" Content="1) Create local commit (single file)"/>
+			<Button Name="BtnAuth" Content="2) Authorize GitHub"/>
+			<Button Name="BtnPushPr" Content="3) Push + Create PR"/>
 		</StackPanel>
 
-		<!-- Log -->
-		<Border Grid.Row="4" Grid.ColumnSpan="2" CornerRadius="6" BorderThickness="1" BorderBrush="#333">
+		<Border Grid.Row="4" Grid.ColumnSpan="2"
+				CornerRadius="6"
+				BorderThickness="1"
+				Background="{DynamicResource PanelBg}"
+				BorderBrush="{DynamicResource PanelBorder}">
 			<ScrollViewer HorizontalScrollBarVisibility="Auto"
 						  VerticalScrollBarVisibility="Auto">
 				<TextBox Name="TxtLog"
@@ -41,12 +40,14 @@
 						 IsReadOnly="True"
 						 TextWrapping="NoWrap"
 						 MinHeight="220"
-						 Padding="8"/>
+						 Padding="8"
+						 Background="Transparent"
+						 BorderThickness="0"
+						 FontFamily="Consolas"/>
 			</ScrollViewer>
 		</Border>
 
-		<!-- Status -->
-		<TextBlock Grid.Row="5" Grid.ColumnSpan="2" Name="TxtProgress" Text="Ready." Opacity="0.8"/>
+		<TextBlock Grid.Row="5" Grid.ColumnSpan="2" Name="TxtProgress" Text="Ready." Opacity="0.8" Classes="muted"/>
 
 	</Grid>
 </UserControl>

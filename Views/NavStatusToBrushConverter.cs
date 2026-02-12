@@ -21,7 +21,7 @@ public sealed class NavStatusToBrushConverter : IValueConverter
         {
             TranslationStatus.Green => new SolidColorBrush(Color.Parse("#FF1F6F2A")), // green
             TranslationStatus.Yellow => new SolidColorBrush(Color.Parse("#FF8A6E00")), // yellow
-            _ => new SolidColorBrush(Color.Parse("#FF7A1E1E")), // red
+            _ => new SolidColorBrush(Color.Parse("#FF6B3A3A")), // red
         };
     }
 
