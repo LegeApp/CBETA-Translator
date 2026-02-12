@@ -16,7 +16,6 @@
         <StackPanel Orientation="Horizontal" Spacing="8" DockPanel.Dock="Left">
           <Button Name="BtnToggleNav" Width="40" Height="32" Content="☰" Background="#33FFFFFF"/>
           <Button Name="BtnOpenRoot" Width="140" Height="32" Content="Open Root" Background="#33FFFFFF"/>
-          <Button Name="BtnSave" Width="120" Height="32" Content="Save" Background="#33FFFFFF"/>
 
           <!-- NEW: Licenses button -->
           <Button Name="BtnLicenses"

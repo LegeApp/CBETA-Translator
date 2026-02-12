@@ -181,6 +181,8 @@ public partial class ReadableTabView : UserControl
             RoutingStrategies.Tunnel,
             handledEventsToo: true);
 
+
+
         if (_findQuery != null)
         {
             _findQuery.KeyDown += FindQuery_KeyDown;
@@ -249,34 +251,137 @@ public partial class ReadableTabView : UserControl
 
     private void OnPointerPressed_TunnelForNotes(object? sender, PointerPressedEventArgs e)
     {
-        // primary click only
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
             return;
 
-        // Avalonia 11.3.11: e.Source as IVisual
-        var src = e.Source as Control;
-        if (src == null) return;
+        // If click is inside notes panel, ignore so copy/scroll works
+        if (IsInsideControl(e.Source, _notesPanel))
+            return;
 
-        var tb = src.GetVisualAncestors().OfType<TextBox>().FirstOrDefault();
+        // If popup already open -> do NOT hijack clicks anymore (your 2nd option)
+        if (_notesPanel?.IsVisible == true)
+            return;
+
+        // Ignore actual scrollbar parts only (Thumb/ScrollBar/RepeatButton)
+        if (IsInsideScrollbarStuff(e.Source))
+            return;
+
+        var tb = FindAncestorTextBox(e.Source);
         if (tb == null) return;
 
-        // Only handle clicks inside our two editors
         if (!ReferenceEquals(tb, _editorOriginal) && !ReferenceEquals(tb, _editorTranslated))
             return;
 
         var doc = ReferenceEquals(tb, _editorOriginal) ? _renderOrig : _renderTran;
         if (doc == null || doc.IsEmpty) return;
 
-        int idx = GetCharIndexFromPointer(tb, e);
-        if (idx < 0) idx = tb.CaretIndex;
+        // ONLY open when the user clicked ON the superscript glyph that belongs to a marker
+        if (!TryResolveAnnotationFromSuperscriptClick(tb, doc, e, out var ann))
+            return;
 
-        if (TryResolveAnnotationNearIndex(doc, idx, out var ann))
-        {
-            ShowNotes(ann);
-            NoteClicked?.Invoke(this, ann);
-            e.Handled = true;
-        }
+        ShowNotes(ann);
+        NoteClicked?.Invoke(this, ann);
+
+        // We handled it ONLY in this case (real superscript click)
+        e.Handled = true;
     }
+
+    private bool TryResolveAnnotationFromSuperscriptClick(
+    TextBox tb,
+    RenderedDocument doc,
+    PointerPressedEventArgs e,
+    out DocAnnotation ann)
+    {
+        ann = default!;
+
+        // Get a "best guess" text index from pointer
+        int idx = GetCharIndexFromPointer(tb, e);
+        if (idx < 0) return false;
+
+        string text = tb.Text ?? "";
+        if (text.Length == 0) return false;
+
+        // We will only accept if the clicked glyph is actually a superscript marker char.
+        // Because hit-testing can land one char off, we probe a tiny radius,
+        // but ONLY accept candidates that are superscript characters AND map to an annotation marker.
+        const int R = 2;
+
+        for (int d = 0; d <= R; d++)
+        {
+            // check idx, idx-1, idx+1, idx-2, idx+2...
+            foreach (int cand in new[] { idx, idx - d, idx + d })
+            {
+                if (cand < 0 || cand >= text.Length) continue;
+
+                char c = text[cand];
+                if (!IsSuperscriptMarkerChar(c))
+                    continue;
+
+                if (doc.TryGetAnnotationByMarkerAt(cand, out ann))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsSuperscriptMarkerChar(char c)
+    {
+        // Common superscripts: ¹²³ and U+2070..U+2079
+        // Plus a few “math” superscripts that sometimes sneak in.
+        return c switch
+        {
+            '\u00B9' => true, // ¹
+            '\u00B2' => true, // ²
+            '\u00B3' => true, // ³
+            '\u2070' => true, // ⁰
+            '\u2071' => true, // ⁱ
+            '\u2074' => true, // ⁴
+            '\u2075' => true, // ⁵
+            '\u2076' => true, // ⁶
+            '\u2077' => true, // ⁷
+            '\u2078' => true, // ⁸
+            '\u2079' => true, // ⁹
+            '\u207A' => true, // ⁺
+            '\u207B' => true, // ⁻
+            '\u207C' => true, // ⁼
+            '\u207D' => true, // ⁽
+            '\u207E' => true, // ⁾
+            _ => false
+        };
+    }
+
+
+    private static bool TryResolveAnnotationNearIndex_Reliable(RenderedDocument doc, int idx, out DocAnnotation ann)
+    {
+        ann = default!;
+
+        if (doc.AnnotationMarkers == null || doc.AnnotationMarkers.Count == 0)
+            return false;
+
+        if (doc.TryGetAnnotationByMarkerAt(idx, out ann)) return true;
+
+        // Common off-by-ones
+        if (idx > 0 && doc.TryGetAnnotationByMarkerAt(idx - 1, out ann)) return true;
+        if (doc.TryGetAnnotationByMarkerAt(idx + 1, out ann)) return true;
+
+        // Wider radius for “works in practice”
+        const int R = 14;
+        for (int d = 2; d <= R; d++)
+        {
+            int left = idx - d;
+            if (left >= 0 && doc.TryGetAnnotationByMarkerAt(left, out ann))
+                return true;
+
+            int right = idx + d;
+            if (doc.TryGetAnnotationByMarkerAt(right, out ann))
+                return true;
+        }
+
+        return false;
+    }
+
+
 
 
     private static bool TryResolveAnnotationNearIndex(RenderedDocument doc, int idx, out DocAnnotation ann)
@@ -315,13 +420,67 @@ public partial class ReadableTabView : UserControl
         _notesHeader.Text = string.IsNullOrWhiteSpace(ann.Kind) ? "Note" : ann.Kind!;
         _notesBody.Text = ann.Text ?? "";
 
+        // SHOW IT
         _notesPanel.IsVisible = true;
 
-        // Make it copy-friendly immediately
-        _notesBody.SelectionStart = 0;
-        _notesBody.SelectionEnd = 0;
-        _notesBody.Focus();
+        // DO NOT steal focus — this is what broke mirroring.
+        // Still keep caret sane.
+        try
+        {
+            _notesBody.SelectionStart = 0;
+            _notesBody.SelectionEnd = 0;
+        }
+        catch { }
     }
+
+    private static TextBox? FindAncestorTextBox(object? source)
+    {
+        if (source is TextBox tb0) return tb0;
+
+        // Best path: Visual tree (works for TextPresenter, etc.)
+        if (source is Visual v)
+            return v.GetVisualAncestors().OfType<TextBox>().FirstOrDefault();
+
+        // Fallback: logical tree
+        var cur = source as StyledElement;
+        while (cur != null)
+        {
+            if (cur is TextBox tb) return tb;
+            cur = cur.Parent as StyledElement;
+        }
+
+        return null;
+    }
+
+
+    private static bool IsInsideScrollbarStuff(object? source)
+    {
+        var cur = source as StyledElement;
+        while (cur != null)
+        {
+            if (cur is ScrollBar || cur is Thumb || cur is RepeatButton)
+                return true;
+
+            cur = cur.Parent as StyledElement;
+        }
+        return false;
+    }
+
+
+
+    private static bool IsInsideControl(object? source, Control? root)
+    {
+        if (root == null) return false;
+        var cur = source as StyledElement;
+        while (cur != null)
+        {
+            if (ReferenceEquals(cur, root))
+                return true;
+            cur = cur.Parent as StyledElement;
+        }
+        return false;
+    }
+
 
     private void HideNotes()
     {

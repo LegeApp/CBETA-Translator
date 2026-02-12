@@ -99,7 +99,7 @@
 		<!-- Notes panel (click marker area to open; no tooltip usage) -->
 		<Border Grid.Row="2"
 				Name="NotesPanel"
-				IsVisible="False"
+				IsVisible="True"
 				Background="#FF1E1E1E"
 				BorderBrush="#FF3A3A3A"
 				BorderThickness="1"

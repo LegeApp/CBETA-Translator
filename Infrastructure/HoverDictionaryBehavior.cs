@@ -330,10 +330,10 @@ public sealed class HoverDictionaryBehavior : IDisposable
 
             return idx;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-      //      if (DebugHover)
-      //          Debug.WriteLine("[HOVER] TextLayout HitTest exception: " + ex.Message);
+            //      if (DebugHover)
+            //          Debug.WriteLine("[HOVER] TextLayout HitTest exception: " + ex.Message);
             return -1;
         }
     }
