@@ -88,6 +88,20 @@ public partial class ReadableTabView : UserControl
     private DateTime _suppressMirrorUntilUtc = DateTime.MinValue;
     private const int SuppressMirrorAfterFindMs = 900;
 
+    // -------------------------
+    // Notes: markers + bottom panel
+    // -------------------------
+    private AnnotationMarkerOverlay? _annMarksOriginal;
+    private AnnotationMarkerOverlay? _annMarksTranslated;
+
+    private Border? _notesPanel;
+    private TextBlock? _notesHeader;
+    private TextBox? _notesBody;
+    private Button? _btnCloseNotes;
+
+    // optional: bubble to MainWindow status bar if you want
+    public event EventHandler<DocAnnotation>? NoteClicked;
+
     public ReadableTabView()
     {
         InitializeComponent();
@@ -102,8 +116,8 @@ public partial class ReadableTabView : UserControl
             RefreshPresenterCache(_editorOriginal, isOriginal: true);
             RefreshPresenterCache(_editorTranslated, isOriginal: false);
 
-            SetupHoverDictionary();
-            StartSelectionTimer(); // slow safety-net polling
+            SetupHoverDictionary(); // hover dict MUST be on ORIGINAL
+            StartSelectionTimer();
         };
 
         DetachedFromVisualTree += (_, _) =>
@@ -123,7 +137,6 @@ public partial class ReadableTabView : UserControl
         if (_editorOriginal != null) _editorOriginal.IsReadOnly = true;
         if (_editorTranslated != null) _editorTranslated.IsReadOnly = true;
 
-        // Cache template parts like your HoverDictionaryBehavior
         if (_editorOriginal != null) _editorOriginal.TemplateApplied += (_, _) => RefreshPresenterCache(_editorOriginal, isOriginal: true);
         if (_editorTranslated != null) _editorTranslated.TemplateApplied += (_, _) => RefreshPresenterCache(_editorTranslated, isOriginal: false);
 
@@ -140,6 +153,17 @@ public partial class ReadableTabView : UserControl
 
         if (_hlOriginal != null) _hlOriginal.Target = _editorOriginal;
         if (_hlTranslated != null) _hlTranslated.Target = _editorTranslated;
+
+        _annMarksOriginal = this.FindControl<AnnotationMarkerOverlay>("AnnMarksOriginal");
+        _annMarksTranslated = this.FindControl<AnnotationMarkerOverlay>("AnnMarksTranslated");
+
+        if (_annMarksOriginal != null) _annMarksOriginal.Target = _editorOriginal;
+        if (_annMarksTranslated != null) _annMarksTranslated.Target = _editorTranslated;
+
+        _notesPanel = this.FindControl<Border>("NotesPanel");
+        _notesHeader = this.FindControl<TextBlock>("NotesHeader");
+        _notesBody = this.FindControl<TextBox>("NotesBody");
+        _btnCloseNotes = this.FindControl<Button>("BtnCloseNotes");
     }
 
     private void WireEvents()
@@ -148,6 +172,14 @@ public partial class ReadableTabView : UserControl
         HookUserInputTracking(_editorTranslated);
 
         AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);
+
+        // IMPORTANT: capture note-clicks at UserControl level in Tunnel phase,
+        // and receive events even if something else already handled them.
+        AddHandler(
+            InputElement.PointerPressedEvent,
+            OnPointerPressed_TunnelForNotes,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
 
         if (_findQuery != null)
         {
@@ -162,6 +194,8 @@ public partial class ReadableTabView : UserControl
         if (_btnNext != null) _btnNext.Click += (_, _) => JumpNext();
         if (_btnPrev != null) _btnPrev.Click += (_, _) => JumpPrev();
         if (_btnCloseFind != null) _btnCloseFind.Click += (_, _) => CloseFind();
+
+        if (_btnCloseNotes != null) _btnCloseNotes.Click += (_, _) => HideNotes();
     }
 
     private void RefreshPresenterCache(TextBox? tb, bool isOriginal)
@@ -209,6 +243,173 @@ public partial class ReadableTabView : UserControl
         _hoverDict = null;
     }
 
+    // -------------------------
+    // Notes click (robust)
+    // -------------------------
+
+    private void OnPointerPressed_TunnelForNotes(object? sender, PointerPressedEventArgs e)
+    {
+        // primary click only
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+            return;
+
+        // Avalonia 11.3.11: e.Source as IVisual
+        var src = e.Source as Control;
+        if (src == null) return;
+
+        var tb = src.GetVisualAncestors().OfType<TextBox>().FirstOrDefault();
+        if (tb == null) return;
+
+        // Only handle clicks inside our two editors
+        if (!ReferenceEquals(tb, _editorOriginal) && !ReferenceEquals(tb, _editorTranslated))
+            return;
+
+        var doc = ReferenceEquals(tb, _editorOriginal) ? _renderOrig : _renderTran;
+        if (doc == null || doc.IsEmpty) return;
+
+        int idx = GetCharIndexFromPointer(tb, e);
+        if (idx < 0) idx = tb.CaretIndex;
+
+        if (TryResolveAnnotationNearIndex(doc, idx, out var ann))
+        {
+            ShowNotes(ann);
+            NoteClicked?.Invoke(this, ann);
+            e.Handled = true;
+        }
+    }
+
+
+    private static bool TryResolveAnnotationNearIndex(RenderedDocument doc, int idx, out DocAnnotation ann)
+    {
+        ann = default!;
+
+        if (doc.AnnotationMarkers == null || doc.AnnotationMarkers.Count == 0)
+            return false;
+
+        // exact + common off-by-ones
+        if (doc.TryGetAnnotationByMarkerAt(idx, out ann)) return true;
+        if (idx > 0 && doc.TryGetAnnotationByMarkerAt(idx - 1, out ann)) return true;
+        if (doc.TryGetAnnotationByMarkerAt(idx + 1, out ann)) return true;
+
+        // small radius probe (hit-test often lands on neighbor glyphs for superscripts)
+        const int R = 14;
+        for (int d = 2; d <= R; d++)
+        {
+            int left = idx - d;
+            if (left >= 0 && doc.TryGetAnnotationByMarkerAt(left, out ann))
+                return true;
+
+            int right = idx + d;
+            if (doc.TryGetAnnotationByMarkerAt(right, out ann))
+                return true;
+        }
+
+        return false;
+    }
+
+    private void ShowNotes(DocAnnotation ann)
+    {
+        if (_notesPanel == null || _notesBody == null || _notesHeader == null)
+            return;
+
+        _notesHeader.Text = string.IsNullOrWhiteSpace(ann.Kind) ? "Note" : ann.Kind!;
+        _notesBody.Text = ann.Text ?? "";
+
+        _notesPanel.IsVisible = true;
+
+        // Make it copy-friendly immediately
+        _notesBody.SelectionStart = 0;
+        _notesBody.SelectionEnd = 0;
+        _notesBody.Focus();
+    }
+
+    private void HideNotes()
+    {
+        if (_notesPanel == null || _notesBody == null) return;
+        _notesPanel.IsVisible = false;
+        _notesBody.Text = "";
+    }
+
+    private int GetCharIndexFromPointer(TextBox tb, PointerEventArgs e)
+    {
+        try
+        {
+            var pointInTb = e.GetPosition(tb);
+
+            Visual? presenter = ReferenceEquals(tb, _editorOriginal) ? _presOriginal : _presTranslated;
+            ScrollViewer? sv = ReferenceEquals(tb, _editorOriginal) ? _svOriginal : _svTranslated;
+
+            presenter ??= tb
+                .GetVisualDescendants()
+                .OfType<Visual>()
+                .LastOrDefault(v => string.Equals(v.GetType().Name, "TextPresenter", StringComparison.Ordinal))
+                ?? tb.GetVisualDescendants()
+                    .OfType<Visual>()
+                    .LastOrDefault(v => (v.GetType().Name?.Contains("Text", StringComparison.OrdinalIgnoreCase) ?? false));
+
+            if (presenter == null) return -1;
+
+            Point pPresenter;
+
+            var direct = tb.TranslatePoint(pointInTb, presenter);
+            if (direct != null)
+            {
+                pPresenter = direct.Value;
+            }
+            else
+            {
+                sv ??= FindScrollViewer(tb);
+                if (sv == null) return -1;
+
+                var pSv = tb.TranslatePoint(pointInTb, sv);
+                if (pSv == null) return -1;
+
+                var corrected = new Point(pSv.Value.X + sv.Offset.X, pSv.Value.Y + sv.Offset.Y);
+                var pPres2 = sv.TranslatePoint(corrected, presenter);
+                if (pPres2 == null) return -1;
+
+                pPresenter = pPres2.Value;
+            }
+
+            var tl = TryGetTextLayout(presenter);
+            if (tl == null) return -1;
+
+            var hit = tl.HitTestPoint(pPresenter);
+            int idx = hit.TextPosition + (hit.IsTrailing ? 1 : 0);
+
+            int len = tb.Text?.Length ?? 0;
+            if (len <= 0) return -1;
+
+            if (idx < 0) idx = 0;
+            if (idx >= len) idx = len - 1;
+            return idx;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    private static TextLayout? TryGetTextLayout(Visual presenter)
+    {
+        try
+        {
+            var prop = presenter.GetType().GetProperty(
+                "TextLayout",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+            return prop?.GetValue(presenter) as TextLayout;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // -------------------------
+    // Public API
+    // -------------------------
+
     public void Clear()
     {
         _renderOrig = RenderedDocument.Empty;
@@ -224,6 +425,11 @@ public partial class ReadableTabView : UserControl
         ResetScroll(_svOriginal);
         ResetScroll(_svTranslated);
 
+        if (_annMarksOriginal != null) _annMarksOriginal.Annotations = Array.Empty<DocAnnotation>();
+        if (_annMarksTranslated != null) _annMarksTranslated.Annotations = Array.Empty<DocAnnotation>();
+
+        HideNotes();
+
         ClearFindState();
         CloseFind();
     }
@@ -236,7 +442,9 @@ public partial class ReadableTabView : UserControl
         if (_editorOriginal != null) _editorOriginal.Text = _renderOrig.Text;
         if (_editorTranslated != null) _editorTranslated.Text = _renderTran.Text;
 
-        // after text set, layout/template settles later — refresh caches now + later
+        if (_annMarksOriginal != null) _annMarksOriginal.Annotations = _renderOrig.Annotations ?? new List<DocAnnotation>();
+        if (_annMarksTranslated != null) _annMarksTranslated.Annotations = _renderTran.Annotations ?? new List<DocAnnotation>();
+
         RefreshPresenterCache(_editorOriginal, isOriginal: true);
         RefreshPresenterCache(_editorTranslated, isOriginal: false);
 
@@ -268,6 +476,8 @@ public partial class ReadableTabView : UserControl
             _lastTranSelEnd = _editorTranslated.SelectionEnd;
             _lastTranCaret = _editorTranslated.CaretIndex;
         }
+
+        HideNotes();
 
         if (_findBar?.IsVisible == true)
             RecomputeMatches(resetToFirst: false);
@@ -607,8 +817,7 @@ public partial class ReadableTabView : UserControl
         if (_findBar?.IsVisible != true) return;
 
         var tb = _findTarget;
-        if (tb == null)
-            return;
+        if (tb == null) return;
 
         string hay = tb.Text ?? "";
         string q = (_findQuery?.Text ?? "").Trim();
@@ -657,15 +866,7 @@ public partial class ReadableTabView : UserControl
             if (oldSelectedStart >= 0)
             {
                 int exact = _matchStarts.IndexOf(oldSelectedStart);
-                if (exact >= 0)
-                {
-                    _matchIndex = exact;
-                }
-                else
-                {
-                    int nearest = _matchStarts.FindIndex(s => s >= oldSelectedStart);
-                    _matchIndex = nearest >= 0 ? nearest : _matchStarts.Count - 1;
-                }
+                _matchIndex = exact >= 0 ? exact : 0;
             }
             else
             {
@@ -713,8 +914,7 @@ public partial class ReadableTabView : UserControl
 
         ApplyHighlight(_findTarget, start, len);
 
-        if (!scroll)
-            return;
+        if (!scroll) return;
 
         try
         {
@@ -764,7 +964,7 @@ public partial class ReadableTabView : UserControl
     }
 
     // -------------------------
-    // Scroll helpers (Avalonia 11.3.11)
+    // Scroll helpers
     // -------------------------
 
     private static void ResetScroll(ScrollViewer? sv)
@@ -798,7 +998,6 @@ public partial class ReadableTabView : UserControl
         return Math.Max(0, y);
     }
 
-    // Key fix: use TextLayout geometry (works with wrapping; no drift late in file)
     private void CenterByTextLayoutReliable(TextBox tb, int charIndex)
     {
         ScrollViewer? sv;
@@ -824,7 +1023,6 @@ public partial class ReadableTabView : UserControl
         if (len <= 0) return;
         charIndex = Math.Clamp(charIndex, 0, len);
 
-        // layout settles over multiple render ticks in huge docs
         Dispatcher.UIThread.Post(() => TryCenterOnce_TextLayout(tb, sv, scp, presenter, charIndex), DispatcherPriority.Render);
         DispatcherTimer.RunOnce(() => TryCenterOnce_TextLayout(tb, sv, scp, presenter, charIndex), TimeSpan.FromMilliseconds(28));
         DispatcherTimer.RunOnce(() => TryCenterOnce_TextLayout(tb, sv, scp, presenter, charIndex), TimeSpan.FromMilliseconds(60));
@@ -838,7 +1036,6 @@ public partial class ReadableTabView : UserControl
         if (!IsFinitePositive(viewportH) || !IsFinitePositive(extentH))
             return;
 
-        // target visual for TranslatePoint: prefer ScrollContentPresenter if present, else ScrollViewer
         Visual target = (Visual?)scp ?? (Visual)sv;
 
         presenter ??= tb
@@ -848,7 +1045,6 @@ public partial class ReadableTabView : UserControl
 
         if (presenter == null) return;
 
-        // get TextLayout from presenter (same pattern as HoverDictionaryBehavior)
         TextLayout? tl = null;
         try
         {
@@ -869,7 +1065,6 @@ public partial class ReadableTabView : UserControl
 
         double yInViewport = p.Value.Y;
 
-        // slightly above center feels better for reading and avoids "just barely at bottom"
         double targetY = viewportH * 0.40;
         double topBand = viewportH * 0.15;
         double bottomBand = viewportH * 0.85;
@@ -881,51 +1076,5 @@ public partial class ReadableTabView : UserControl
 
         desiredY = ClampY(extentH, viewportH, desiredY);
         sv.Offset = new Vector(sv.Offset.X, desiredY);
-    }
-
-    // Wrapper for old call sites
-    private void CenterByCharacterRectReliable(TextBox tb, int charIndex)
-        => CenterByTextLayoutReliable(tb, charIndex);
-
-    private static bool TryInvokeRectFromIndex(object target, int charIndex, out Rect rect)
-    {
-        rect = default;
-
-        // (kept for compatibility / fallback use if you ever want it)
-        string[] names =
-        {
-            "GetRectFromCharacterIndex",
-            "GetRectangleFromCharacterIndex",
-            "GetCursorRectangle",
-            "GetCaretRectangle",
-            "GetCaretRect",
-        };
-
-        var t = target.GetType();
-
-        foreach (var name in names)
-        {
-            var mi = t.GetMethod(
-                name,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                binder: null,
-                types: new[] { typeof(int) },
-                modifiers: null);
-
-            if (mi == null) continue;
-
-            try
-            {
-                var val = mi.Invoke(target, new object[] { charIndex });
-                if (val is Rect r)
-                {
-                    rect = r;
-                    return true;
-                }
-            }
-            catch { }
-        }
-
-        return false;
     }
 }

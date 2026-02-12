@@ -1,7 +1,9 @@
-﻿using System;
+﻿// Text/CbetaTeiRenderer.cs
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using CbetaTranslator.App.Infrastructure;
 using CbetaTranslator.App.Models;
 
 namespace CbetaTranslator.App.Text;
@@ -13,12 +15,13 @@ namespace CbetaTranslator.App.Text;
 /// - Render lb as newline, pb/p/head as paragraph break
 /// Not a full XML parser; fast tag/text scanner.
 ///
-/// "To the moon" changes:
-/// - No WebUtility.HtmlDecode (fast tiny entity decoder only when '&' appears)
-/// - No per-chunk allocations (no raw.ToString / normalized strings)
-/// - Normalize whitespace while appending (trim + collapse)
-/// - Remove segments.Sort (segments are produced in-order)
-/// - Cache attribute-name spans to reduce tiny overhead
+/// Notes/annotations:
+/// - Skips rendering <back> entirely (so “校注” blocks don’t show in the reader)
+/// - Collects:
+///   1) Inline notes: <note place="inline">...</note> at current text position
+///   2) End notes in <back>: <note ... target="#nkr_note_mod_XXXX">...</note>
+///      anchored by <anchor xml:id="nkr_note_mod_XXXX" .../> in the body.
+/// - Builds DocAnnotation list + calls AnnotationMarkerInserter.InsertMarkers(...)
 /// </summary>
 public static class CbetaTeiRenderer
 {
@@ -30,11 +33,26 @@ public static class CbetaTeiRenderer
         var sb = new StringBuilder(xml.Length);
         var segments = new List<RenderSegment>(capacity: 4096);
 
+        // collected annotations
+        var annotations = new List<DocAnnotation>(capacity: 128);
+
+        // anchor xml:id -> rendered offset (in sb) + inferred kind
+        var anchorPosById = new Dictionary<string, (int Pos, string? Kind)>(StringComparer.Ordinal);
+
+        // note capture state (for <note> ... </note>)
+        bool inNoteCapture = false;
+        var noteSb = new StringBuilder(256);
+        int noteAnchorPos = -1;
+        string? noteKind = null;
+
         string currentKey = "START";
         int segStart = 0;
 
         int teiHeaderDepth = 0;
-        bool lastWasNewline = false;
+        int backDepth = 0; // when >0, we do not render text to sb, but we still parse notes
+
+        bool lastWasNewline = false;       // for main sb
+        bool noteLastWasNewline = false;   // for noteSb
 
         void StartNewSegment(string newKey)
         {
@@ -56,52 +74,137 @@ public static class CbetaTeiRenderer
             int relLt = s.Slice(i).IndexOf('<');
             if (relLt < 0)
             {
-                if (teiHeaderDepth == 0)
+                // trailing text
+                if (teiHeaderDepth == 0 && backDepth == 0 && !inNoteCapture)
                     AppendText(sb, s.Slice(i), ref lastWasNewline);
+                else if (inNoteCapture)
+                    AppendText(noteSb, s.Slice(i), ref noteLastWasNewline);
                 break;
             }
 
             int lt = i + relLt;
 
             // text before tag
-            if (lt > i && teiHeaderDepth == 0)
-                AppendText(sb, s.Slice(i, lt - i), ref lastWasNewline);
+            if (lt > i)
+            {
+                var rawText = s.Slice(i, lt - i);
+
+                if (inNoteCapture)
+                {
+                    AppendText(noteSb, rawText, ref noteLastWasNewline);
+                }
+                else if (teiHeaderDepth == 0 && backDepth == 0)
+                {
+                    AppendText(sb, rawText, ref lastWasNewline);
+                }
+            }
 
             // find end of tag
             int relGt = s.Slice(lt).IndexOf('>');
             if (relGt < 0)
             {
-                if (teiHeaderDepth == 0)
-                    AppendText(sb, s.Slice(lt), ref lastWasNewline);
+                // malformed tail -> treat as text
+                var tail = s.Slice(lt);
+                if (inNoteCapture)
+                    AppendText(noteSb, tail, ref noteLastWasNewline);
+                else if (teiHeaderDepth == 0 && backDepth == 0)
+                    AppendText(sb, tail, ref lastWasNewline);
                 break;
             }
 
             int gt = lt + relGt;
             var tagSpan = s.Slice(lt, gt - lt + 1);
 
-            // process tag
             if (TryParseTag(tagSpan, out var isEndTag, out var tagName, out var attrs))
             {
                 if (isEndTag)
                 {
+                    // depth tracking
                     if (EqualsIgnoreCase(tagName, "teiHeader"))
                         teiHeaderDepth = Math.Max(0, teiHeaderDepth - 1);
 
-                    // Paragraph end spacing (outside header)
-                    if (teiHeaderDepth == 0 && EqualsIgnoreCase(tagName, "p"))
+                    if (EqualsIgnoreCase(tagName, "back"))
+                        backDepth = Math.Max(0, backDepth - 1);
+
+                    // finish note capture
+                    if (EqualsIgnoreCase(tagName, "note") && inNoteCapture)
+                    {
+                        inNoteCapture = false;
+
+                        var noteText = noteSb.ToString().Trim();
+                        noteSb.Clear();
+                        noteLastWasNewline = false;
+
+                        if (noteAnchorPos >= 0 && !string.IsNullOrWhiteSpace(noteText))
+                        {
+                            // anchor point note: Start==EndExclusive is fine for marker insertion
+                            annotations.Add(new DocAnnotation(noteAnchorPos, noteAnchorPos, noteText, noteKind));
+                        }
+
+                        noteAnchorPos = -1;
+                        noteKind = null;
+                    }
+
+                    // paragraph end spacing (only in main rendered part)
+                    if (teiHeaderDepth == 0 && backDepth == 0 && EqualsIgnoreCase(tagName, "p"))
                         EnsureParagraphBreak(sb, ref lastWasNewline);
                 }
                 else
                 {
+                    // entering blocks
                     if (EqualsIgnoreCase(tagName, "teiHeader"))
                     {
                         teiHeaderDepth++;
                     }
-                    else if (teiHeaderDepth == 0)
+                    else if (EqualsIgnoreCase(tagName, "back"))
+                    {
+                        backDepth++;
+                    }
+
+                    // If we're capturing a note and we hit any start-tag: treat as a soft separator
+                    // (so <lb/> etc. doesn't smash words together inside notes)
+                    if (inNoteCapture)
+                    {
+                        // a little conservative: only add space/newline for obvious breaks
+                        if (EqualsIgnoreCase(tagName, "lb") || EqualsIgnoreCase(tagName, "p") || EqualsIgnoreCase(tagName, "head") || EqualsIgnoreCase(tagName, "br"))
+                            AppendNewline(noteSb, ref noteLastWasNewline);
+                        else
+                            AppendText(noteSb, " ".AsSpan(), ref noteLastWasNewline);
+                    }
+
+                    // Only do segmentation/rendering while not in teiHeader and not in back and not in note capture
+                    if (teiHeaderDepth == 0 && backDepth == 0 && !inNoteCapture)
                     {
                         // Segment boundary keys
                         if (TryMakeSyncKey(tagName, attrs, out var key))
                             StartNewSegment(key);
+
+                        // Record note anchors in main text:
+                        // <anchor xml:id="nkr_note_mod_0535011" .../>
+                        if (EqualsIgnoreCase(tagName, "anchor"))
+                        {
+                            var id = Attr(attrs, AttrXmlId);
+                            if (!string.IsNullOrWhiteSpace(id) && id.StartsWith("nkr_note_", StringComparison.Ordinal))
+                            {
+                                var kind = InferNoteKindFromId(id);
+                                anchorPosById[id] = (sb.Length, kind);
+                            }
+                        }
+
+                        // Inline notes: <note place="inline">...</note>
+                        if (EqualsIgnoreCase(tagName, "note"))
+                        {
+                            var place = Attr(attrs, "place");
+                            if (string.Equals(place, "inline", StringComparison.OrdinalIgnoreCase))
+                            {
+                                inNoteCapture = true;
+                                noteSb.Clear();
+                                noteLastWasNewline = false;
+
+                                noteAnchorPos = sb.Length;
+                                noteKind = Attr(attrs, "type") ?? "inline";
+                            }
+                        }
 
                         // Rendering structural breaks
                         if (EqualsIgnoreCase(tagName, "lb"))
@@ -115,19 +218,63 @@ public static class CbetaTeiRenderer
                             EnsureParagraphBreak(sb, ref lastWasNewline);
                         }
                     }
+                    else
+                    {
+                        // We are inside <back> (or header) — do NOT render, but we DO want to collect end-notes.
+                        // End-notes format: <note ... target="#nkr_note_mod_0535011">...</note>
+                        if (teiHeaderDepth == 0 && EqualsIgnoreCase(tagName, "note"))
+                        {
+                            var target = Attr(attrs, "target");
+                            if (!string.IsNullOrWhiteSpace(target) && target[0] == '#')
+                            {
+                                var targetId = target.Substring(1);
+
+                                // Only handle CBETA end-note style that has an anchor in body
+                                if (targetId.StartsWith("nkr_note_", StringComparison.Ordinal))
+                                {
+                                    inNoteCapture = true;
+                                    noteSb.Clear();
+                                    noteLastWasNewline = false;
+
+                                    if (anchorPosById.TryGetValue(targetId, out var hit))
+                                    {
+                                        noteAnchorPos = hit.Pos;
+                                        noteKind = hit.Kind ?? Attr(attrs, "type");
+                                    }
+                                    else
+                                    {
+                                        // anchor missing (still capture text, but won't attach)
+                                        noteAnchorPos = -1;
+                                        noteKind = InferNoteKindFromId(targetId) ?? Attr(attrs, "type");
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
             i = gt + 1;
         }
 
-        // Close last segment
+        // Close last segment (main text only)
         int finalEnd = sb.Length;
         if (finalEnd > segStart)
             segments.Add(new RenderSegment(currentKey, segStart, finalEnd));
 
-        // segments are already in order; no sort needed
-        return new RenderedDocument(sb.ToString(), segments);
+        // Build final text
+        var text = sb.ToString();
+
+        // Insert visible markers/superscripts into the rendered text.
+        // (Your AnnotationMarkerInserter decides how markers look.)
+        var (newText, newSegments, markers) =
+            AnnotationMarkerInserter.InsertMarkers(text, annotations, segments);
+
+        return new RenderedDocument(
+            newText,
+            newSegments,
+            annotations,
+            markers);
     }
 
     // ------------------------------------------------------------
@@ -272,7 +419,7 @@ public static class CbetaTeiRenderer
         if (!wroteAny)
             return;
 
-        // Old behavior: if previous output ends with non-ws and this appended chunk starts with non-ws, insert a space.
+        // If previous output ends with non-ws and this appended chunk starts with non-ws, insert a space.
         if (hadOutputBefore && !prevIsWs)
         {
             int first = before;
@@ -520,6 +667,18 @@ public static class CbetaTeiRenderer
             i = end + 1;
         }
 
+        return null;
+    }
+
+    private static string? InferNoteKindFromId(string id)
+    {
+        // examples:
+        // nkr_note_mod_0535011
+        // nkr_note_orig_0535011
+        // nkr_note_add_0528b0901
+        if (id.StartsWith("nkr_note_mod_", StringComparison.Ordinal)) return "mod";
+        if (id.StartsWith("nkr_note_orig_", StringComparison.Ordinal)) return "orig";
+        if (id.StartsWith("nkr_note_add_", StringComparison.Ordinal)) return "add";
         return null;
     }
 }

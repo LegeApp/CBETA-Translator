@@ -69,8 +69,8 @@ public sealed class HoverDictionaryBehavior : IDisposable
         _tb.DetachedFromVisualTree += OnDetached;
         _tb.TemplateApplied += OnTemplateApplied;
 
-        if (DebugHover)
-            Debug.WriteLine($"[HOVER] Attached to TextBox. Name={_tb.Name} IsHitTestVisible={_tb.IsHitTestVisible}");
+      //  if (DebugHover)
+      //      Debug.WriteLine($"[HOVER] Attached to TextBox. Name={_tb.Name} IsHitTestVisible={_tb.IsHitTestVisible}");
     }
 
     public void Dispose()
@@ -92,15 +92,15 @@ public sealed class HoverDictionaryBehavior : IDisposable
 
         HideTooltip();
 
-        if (DebugHover)
-            Debug.WriteLine("[HOVER] Disposed.");
+     //   if (DebugHover)
+     //       Debug.WriteLine("[HOVER] Disposed.");
     }
 
     private void OnDetached(object? sender, VisualTreeAttachmentEventArgs e)
     {
-        if (DebugHover)
-            Debug.WriteLine("[HOVER] TextBox detached -> disposing behavior.");
-        Dispose();
+     //   if (DebugHover)
+     //       Debug.WriteLine("[HOVER] TextBox detached -> disposing behavior.");
+     //   Dispose();
     }
 
     private void OnTemplateApplied(object? sender, TemplateAppliedEventArgs e)
@@ -116,12 +116,12 @@ public sealed class HoverDictionaryBehavior : IDisposable
 
             RefreshPresenterCache();
 
-            if (DebugHover)
-            {
-                Debug.WriteLine($"[HOVER] TemplateApplied: sv={(_sv != null)} presenter={(_presenter != null)} type={_presenter?.GetType().FullName ?? "(null)"}");
-                if (_sv != null)
-                    Debug.WriteLine($"[HOVER] SV Offset={_sv.Offset} Viewport={_sv.Viewport} Extent={_sv.Extent}");
-            }
+        //    if (DebugHover)
+        //    {
+        //        Debug.WriteLine($"[HOVER] TemplateApplied: sv={(_sv != null)} presenter={(_presenter != null)} type={_presenter?.GetType().FullName ?? "(null)"}");
+        //        if (_sv != null)
+        //            Debug.WriteLine($"[HOVER] SV Offset={_sv.Offset} Viewport={_sv.Viewport} Extent={_sv.Extent}");
+        //    }
         }, DispatcherPriority.Loaded);
 
         DispatcherTimer.RunOnce(() =>
@@ -129,8 +129,8 @@ public sealed class HoverDictionaryBehavior : IDisposable
             if (_isDisposed) return;
             RefreshPresenterCache();
 
-            if (DebugHover)
-                Debug.WriteLine($"[HOVER] TemplateApplied+delay: presenter={(_presenter != null)} type={_presenter?.GetType().FullName ?? "(null)"}");
+     //       if (DebugHover)
+     //           Debug.WriteLine($"[HOVER] TemplateApplied+delay: presenter={(_presenter != null)} type={_presenter?.GetType().FullName ?? "(null)"}");
         }, TimeSpan.FromMilliseconds(120));
     }
 
@@ -173,8 +173,8 @@ public sealed class HoverDictionaryBehavior : IDisposable
     {
         if (_isDisposed) return;
 
-        if (DebugHover)
-            Debug.WriteLine("[HOVER] PointerExited -> hide");
+      //  if (DebugHover)
+      //      Debug.WriteLine("[HOVER] PointerExited -> hide");
 
         _hasLastPoint = false;
         _lastIndex = -1;
@@ -196,8 +196,8 @@ public sealed class HoverDictionaryBehavior : IDisposable
                 _loadCts = new CancellationTokenSource();
                 var ct = _loadCts.Token;
 
-                if (DebugHover)
-                    Debug.WriteLine("[HOVER] Kicking off dictionary load...");
+            //    if (DebugHover)
+            //        Debug.WriteLine("[HOVER] Kicking off dictionary load...");
 
                 _ = Task.Run(async () =>
                 {
@@ -217,8 +217,8 @@ public sealed class HoverDictionaryBehavior : IDisposable
                     {
                         if (_isDisposed) return;
 
-                        if (DebugHover)
-                            Debug.WriteLine("[HOVER] Dictionary loaded -> rerun hover lookup");
+           //             if (DebugHover)
+           //                 Debug.WriteLine("[HOVER] Dictionary loaded -> rerun hover lookup");
 
                         if (_hasLastPoint)
                             UpdateTooltipFromPoint(_lastPointInTextBox);
@@ -231,8 +231,8 @@ public sealed class HoverDictionaryBehavior : IDisposable
 
         int idx = GetCharIndexFromPoint(pointInTextBox);
 
-        if (DebugHover)
-            Debug.WriteLine($"[HOVER] HitTest idx={idx} textLen={(_tb.Text?.Length ?? 0)}");
+   //     if (DebugHover)
+   //         Debug.WriteLine($"[HOVER] HitTest idx={idx} textLen={(_tb.Text?.Length ?? 0)}");
 
         var text = _tb.Text ?? "";
         if (idx < 0 || idx >= text.Length)
@@ -284,8 +284,8 @@ public sealed class HoverDictionaryBehavior : IDisposable
         if (!TryMapPointToPresenter(pointInTextBox, out var pPresenter))
             return -1;
 
-        if (DebugHover)
-            Debug.WriteLine($"[HOVER] CoordMap(direct): tb={pointInTextBox} pres={pPresenter}");
+   //     if (DebugHover)
+   //         Debug.WriteLine($"[HOVER] CoordMap(direct): tb={pointInTextBox} pres={pPresenter}");
 
         int idx = TryHitTestViaTextLayout(_presenter, pPresenter, text.Length);
         if (idx >= 0)
@@ -320,8 +320,8 @@ public sealed class HoverDictionaryBehavior : IDisposable
             // Do NOT require IsInside. TextPosition is still the nearest hit.
             int idx = r.TextPosition + (r.IsTrailing ? 1 : 0);
 
-            if (DebugHover)
-                Debug.WriteLine($"[HOVER] TextLayout hit: inside={r.IsInside} pos={r.TextPosition} trailing={r.IsTrailing} -> idx={idx}");
+     //       if (DebugHover)
+     //           Debug.WriteLine($"[HOVER] TextLayout hit: inside={r.IsInside} pos={r.TextPosition} trailing={r.IsTrailing} -> idx={idx}");
 
             if (textLen <= 0) return -1;
 
@@ -332,8 +332,8 @@ public sealed class HoverDictionaryBehavior : IDisposable
         }
         catch (Exception ex)
         {
-            if (DebugHover)
-                Debug.WriteLine("[HOVER] TextLayout HitTest exception: " + ex.Message);
+      //      if (DebugHover)
+      //          Debug.WriteLine("[HOVER] TextLayout HitTest exception: " + ex.Message);
             return -1;
         }
     }

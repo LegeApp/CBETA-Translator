@@ -99,6 +99,7 @@ public partial class MainWindow : Window
         _searchView = this.FindControl<SearchTabView>("SearchView");
         _gitView = this.FindControl<GitTabView>("GitView");
 
+
         if (_translationView != null)
         {
             _translationView.SaveRequested += async (_, _) => await SaveTranslatedFromTabAsync();
